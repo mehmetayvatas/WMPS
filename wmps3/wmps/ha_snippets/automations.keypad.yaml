@@ -1,0 +1,36 @@
+# Example automations to control WMPS from Home Assistant UI
+# Place this file into your HA config (e.g., /config/automations.keypad.yaml)
+# and include it from your main 'automations.yaml' if needed.
+#
+# Notes:
+# - These examples assume PORT MODE with rest_command.wmps_start_cycle defined
+#   (see configuration.extend.yaml). If you use Ingress only, trigger the API
+#   from inside HA (e.g., AppDaemon, Python Script, or a webhook endpoint in your app).
+
+- id: wmps_keypad_start_cycle
+  alias: "WMPS: Keypad → Start Cycle"
+  description: "Start a machine cycle when a keypad code is accepted."
+  mode: single
+  trigger:
+    - platform: state
+      entity_id: input_text.wmps_user_id
+      to: "OK"  # Replace this with your own signal (e.g., from a real keypad integration)
+  condition: []
+  action:
+    - service: script.wmps_start_cycle
+      data: {}
+
+- id: wmps_low_balance_alert
+  alias: "WMPS: Low Balance Alert"
+  description: "Notify when a user's balance falls below a threshold."
+  mode: single
+  trigger:
+    - platform: numeric_state
+      entity_id: sensor.wmps_last_balance  # Create this sensor via template or REST, if needed
+      below: 10
+  condition: []
+  action:
+    - service: persistent_notification.create
+      data:
+        title: "WMPS"
+        message: "User balance is low."

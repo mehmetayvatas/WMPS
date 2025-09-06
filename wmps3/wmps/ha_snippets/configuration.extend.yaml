@@ -1,0 +1,67 @@
+# This file extends your Home Assistant configuration with WMPS helpers.
+# Copy to your HA config directory (e.g., /config/configuration.extend.yaml) and include it from configuration.yaml:
+#   homeassistant:
+#     packages: !include_dir_named packages
+# Or simply add a single include:
+#   !include configuration.extend.yaml
+#
+# Notes:
+# - The REST command below works in PORT mode (when you expose 8000/tcp on the add-on).
+# - If you are using Ingress only, prefer calling the API from inside HA (e.g., webhook) instead of REST over HTTP.
+#
+# All comments are in English by request.
+
+input_text:
+  wmps_user_id:
+    name: WMPS User ID
+    max: 32
+    mode: text
+
+input_number:
+  wmps_machine_id:
+    name: WMPS Machine ID
+    min: 1
+    max: 6
+    step: 1
+
+# --- REST command (PORT MODE) ---
+# Replace HA_IP with your Home Assistant host's LAN IP (e.g., 192.168.1.50).
+rest_command:
+  wmps_start_cycle:
+    url: "http://HA_IP:8000/charge"
+    method: POST
+    content_type: "application/json"
+    payload: >
+      {
+        "tenant_code": "{{ states('input_text.wmps_user_id') }}",
+        "machine": {{ states('input_number.wmps_machine_id') | int }},
+        "price": null,
+        "cycle_minutes": null
+      }
+
+script:
+  wmps_start_cycle:
+    alias: "WMPS: Start Cycle (via REST in port mode)"
+    sequence:
+      - choose:
+          - conditions: >
+              {{ is_state('input_number.wmps_machine_id', 'unknown')
+                 or (states('input_number.wmps_machine_id') | int(0)) == 0
+                 or (states('input_text.wmps_user_id') | length) == 0 }}
+            sequence:
+              - service: persistent_notification.create
+                data:
+                  title: "WMPS"
+                  message: >
+                    {% if is_state('input_number.wmps_machine_id', 'unknown')
+                          or (states('input_number.wmps_machine_id') | int(0)) == 0 %}
+                      Machine ID is not set.
+                    {% elif (states('input_text.wmps_user_id') | length) == 0 %}
+                      User ID is empty.
+                    {% else %}
+                      Invalid inputs.
+                    {% endif %}
+        default:
+          - service: rest_command.wmps_start_cycle
+            data: {}
+    mode: single

@@ -1,0 +1,5 @@
+tenant_code,name,balance,last_transaction_utc
+123456,Tenant A,45.0,2025-09-04T06:11:49.407992+00:00
+654321,Tenant B,25.00,
+111222,Tenant C,10.00,
+555666,Tenant D,75.00,

@@ -1,0 +1,2 @@
+timestamp,tenant_code,machine_number,amount_charged,balance_before,balance_after,cycle_minutes,success
+2025-09-04T06:11:54.521291+00:00,123456,2,5.0,50.0,45.0,30,True

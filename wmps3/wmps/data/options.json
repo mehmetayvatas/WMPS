@@ -1,0 +1,40 @@
+{
+  "ha_url": "http://homeassistant.local:8123",
+  "ha_token": "",
+  "tts_service": "tts.google_translate_say",
+  "media_player": "media_player.vlc_telnet",
+
+  "adam_host": "192.168.1.101",
+  "adam_port": 502,
+
+  "machine_1_enabled": true,
+  "machine_2_enabled": true,
+  "machine_3_enabled": true,
+  "machine_4_enabled": true,
+  "machine_5_enabled": true,
+  "machine_6_enabled": true,
+
+  "machines": [
+    { "id": 1, "cycle_minutes": 30, "price": 5.0, "label": "Washing Machine 1",
+      "ha_switch": "switch.washer_1_control", "ha_sensor": "binary_sensor.washer_1_status", "enabled": true },
+    { "id": 2, "cycle_minutes": 30, "price": 5.0, "label": "Washing Machine 2",
+      "ha_switch": "switch.washer_2_control", "ha_sensor": "binary_sensor.washer_2_status", "enabled": true },
+    { "id": 3, "cycle_minutes": 30, "price": 5.0, "label": "Washing Machine 3",
+      "ha_switch": "switch.washer_3_control", "ha_sensor": "binary_sensor.washer_3_status", "enabled": true },
+    { "id": 4, "cycle_minutes": 60, "price": 5.0, "label": "Dryer 1",
+      "ha_switch": "switch.dryer_4_control", "ha_sensor": "binary_sensor.dryer_4_status", "enabled": true },
+    { "id": 5, "cycle_minutes": 60, "price": 5.0, "label": "Dryer 2",
+      "ha_switch": "switch.dryer_5_control", "ha_sensor": "binary_sensor.dryer_5_status", "enabled": true },
+    { "id": 6, "cycle_minutes": 60, "price": 5.0, "label": "Dryer 3",
+      "ha_switch": "switch.dryer_6_control", "ha_sensor": "binary_sensor.dryer_6_status", "enabled": true }
+  ],
+
+  "washing_minutes": 30,
+  "dryer_minutes": 60,
+  "price_washing": 5.0,
+  "price_dryer": 5.0,
+
+  "activation_confirm_timeout_s": 15,
+
+  "security": { "code_entry_timeout_s": 30, "max_failed_attempts": 5, "lockout_seconds": 120 }
+}
