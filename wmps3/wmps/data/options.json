@@ -1,6 +1,6 @@
 {
   "ha_url": "http://homeassistant.local:8123",
-  "ha_token": "",
+  "ha_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkMzE2N2NhYjgwMGU0NjhjOWU0MzdjYjkxODgyZjFkNyIsImlhdCI6MTc1NzE4NTEzMywiZXhwIjoyMDcyNTQ1MTMzfQ.UbgazzUsbpCEI7cRenayLyONFuenHNM5VRpBibj5wGo",
   "tts_service": "tts.google_translate_say",
   "media_player": "media_player.vlc_telnet",
 
