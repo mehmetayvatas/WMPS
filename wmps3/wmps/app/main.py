@@ -33,7 +33,7 @@ except Exception:
     _HAS_PYMODBUS = False
 
 try:
-    import websocket  # HA WebSocket events
+    import websocket  # HA WebSocket events (websocket-client)
     _HAS_WS = True
 except Exception:
     _HAS_WS = False
@@ -59,6 +59,9 @@ SHARE_TX = SHARE_DIR / "transactions.csv"
 ACCOUNTS_HEADER = "tenant_code,name,balance,last_transaction_utc\n"
 TRANSACTIONS_HEADER = "timestamp,tenant_code,machine_number,amount_charged,balance_before,balance_after,cycle_minutes,success\n"
 
+# ADAM-6050 mapping: DO0..DO5 are Modbus coils 16..21
+ADAM_COIL_BASE = 16
+
 app = FastAPI(title="WMPS API", version="3.2.0")
 
 # ----------------------- Logging -------------------------
@@ -80,7 +83,8 @@ def _log(level: str, msg: str) -> None:
     """Log via app.utils logger if present, else print."""
     if _LOGGER:
         try:
-            lvl = getattr(__import__("logging"), _LEVEL_MAP.get(level.upper(), "INFO"))
+            import logging as _logging  # local import to map level
+            lvl = getattr(_logging, _LEVEL_MAP.get(level.upper(), "INFO"))
             _LOGGER.log(lvl, msg)
             return
         except Exception:
@@ -411,7 +415,7 @@ def _adam_read_di(di_index: int, opts: dict) -> Optional[bool]:
     if not _HAS_PYMODBUS:
         return None
     cfg = _adam_cfg(opts)
-    host = cfg["host"]
+    host = (cfg["host"] or "").strip()
     if not host:
         return None
     try:
@@ -431,20 +435,24 @@ def _adam_read_di(di_index: int, opts: dict) -> Optional[bool]:
         return None
 
 def _adam_write_coil(coil_index: int, state: bool, opts: dict) -> bool:
+    """
+    Write ADAM DO coil. ADAM-6050 maps DO0..5 to coils 16..21, so we add ADAM_COIL_BASE.
+    """
     if not _HAS_PYMODBUS:
         return False
     cfg = _adam_cfg(opts)
-    host = cfg["host"]
+    host = (cfg["host"] or "").strip()
     if not host:
         return False
     try:
+        addr = ADAM_COIL_BASE + int(coil_index)
         with ModbusTcpClient(host=host, port=cfg["port"], timeout=2.0) as client:  # type: ignore
             if not client.connect():
                 _log("WARN", "ADAM: connect failed for write_coil")
                 return False
-            wr = client.write_coil(int(coil_index), bool(state), unit=cfg["unit"])
+            wr = client.write_coil(addr, bool(state), unit=cfg["unit"])
             if not hasattr(wr, "isError") or wr.isError():
-                _log("WARN", "ADAM: write_coil error")
+                _log("WARN", f"ADAM: write_coil error at addr={addr}")
                 return False
             return True
     except Exception as e:
@@ -452,6 +460,9 @@ def _adam_write_coil(coil_index: int, state: bool, opts: dict) -> bool:
         return False
 
 def _adam_pulse(coil_index: int, pulse_seconds: float, opts: dict) -> bool:
+    """
+    Pulse ADAM DO coil with base offset applied.
+    """
     if not _adam_write_coil(coil_index, True, opts):
         return False
     time.sleep(max(0.05, float(pulse_seconds)))
@@ -499,7 +510,7 @@ def machine_is_available(mid: str, opts: dict) -> bool:
 
     # ADAM DI path
     r, di = _machine_adam_mapping(mid, opts)
-    if opts.get("adam_host") is not None and di is not None:
+    if ((opts.get("adam_host") or "").strip()) and di is not None:
         di_state = _adam_read_di(di, opts)
         if di_state is not None:
             # DI True => RUNNING/BUSY (active). Available when False.
@@ -526,24 +537,24 @@ def operate_machine(mid: str, minutes: Optional[int]) -> bool:
     switch, sensor = _machine_entities(mid, opts)
     r, di = _machine_adam_mapping(mid, opts)
 
-    confirm_timeout = int(opts.get("activation_confirm_timeout_s", 8))
+    try:
+        confirm_timeout = int(opts.get("activation_confirm_timeout_s", 8) or 8)
+    except Exception:
+        confirm_timeout = 8
 
     if simulate:
         _log("INFO", f"[SIMULATE] turn ON {switch} for {minutes} minutes")
         return True
 
     # ADAM path if available
-    if opts.get("adam_host") is not None and r is not None:
+    if ((opts.get("adam_host") or "").strip()) and r is not None:
         do_mode = (opts.get("do_mode") or "pulse").lower()
-        pulse_seconds = float(opts.get("pulse_seconds") or 0.8)
-        ok = False
-        if do_mode == "pulse":
-            _log("INFO", f"ADAM: pulse relay index={r} for {pulse_seconds}s (m#{mid})")
-            ok = _adam_pulse(r, pulse_seconds, opts)
-        else:
-            _log("INFO", f"ADAM: set_on relay index={r} (m#{mid})")
-            ok = _adam_write_coil(r, True, opts)
+        try:
+            pulse_seconds = float(opts.get("pulse_seconds") or 0.8)
+        except Exception:
+            pulse_seconds = 0.8
 
+        ok = _adam_pulse(r, pulse_seconds, opts) if do_mode == "pulse" else _adam_write_coil(r, True, opts)
         if not ok:
             _log("WARN", f"ADAM: failed to activate relay for machine {mid}")
             return False
@@ -812,7 +823,7 @@ class KeypadStateMachine:
 
     def _reset(self):
         self.state = "IDLE"
-        self.buf_code = ""
+               self.buf_code = ""
         self.sel_machine = None
         self.last_input = time.monotonic()
 
@@ -884,7 +895,7 @@ def _find_keypad_device(patterns=("event*",)):
             pass
     return None
 
-# HA WebSocket thread
+# HA WebSocket helpers
 def _derive_ws_url(http_url: Optional[str]) -> Optional[str]:
     if not http_url: return None
     u = http_url.strip().rstrip("/")
@@ -896,67 +907,72 @@ def _ha_ws_thread():
     if not _HAS_WS:
         _log("WARN", "websocket-client not available; keypad_source=ha cannot start")
         return
-    opts = _read_options()
-    token = opts.get("ha_token") or ""
-    if not token:
+    opts0 = _read_options()
+    token0 = opts0.get("ha_token") or ""
+    if not token0:
         _log("WARN", "HA WS: missing ha_token")
         return
-    ws_url = opts.get("ha_ws_url") or _derive_ws_url(opts.get("ha_url") or "http://supervisor/core")
-    event_type = opts.get("ha_event_type") or "keyboard_remote_command_received"
+    base_url0 = opts0.get("ha_url") or "http://supervisor/core"
+    ws_url0 = opts0.get("ha_ws_url") or _derive_ws_url(base_url0)
+    event_type_key = opts0.get("ha_event_type") or "keyboard_remote_command_received"
     sm = KeypadStateMachine(opts_provider=_read_options, speak_fn=speak, handle_charge_fn=_handle_charge)
 
-    try:
-        ws = websocket.create_connection(ws_url, timeout=8)  # type: ignore
-    except Exception as e:
-        _log("WARN", f"HA WS: connection failed: {e}")
-        return
-
-    def _send(obj):
+    backoff = 1.0
+    while True:
         try:
-            ws.send(json.dumps(obj))
-        except Exception:
-            pass
+            ws = websocket.create_connection(ws_url0, timeout=8)  # type: ignore
+            _log("INFO", f"HA WS: connected {ws_url0}")
+            backoff = 1.0  # reset on success
 
-    try:
-        # Expect auth_required
-        raw = ws.recv()
-        _send({"type":"auth", "access_token": token})
-        raw = ws.recv()  # auth_ok
-        # Subscribe to events
-        _send({"id": 1, "type": "subscribe_events", "event_type": event_type})
-        _log("INFO", f"HA WS: subscribed to {event_type}")
-
-        while True:
-            raw = ws.recv()
-            if not raw:
-                break
-            try:
-                msg = json.loads(raw)
-            except Exception:
-                continue
-            if msg.get("type") != "event":
-                continue
-            data = ((msg.get("event") or {}).get("data") or {})
-            # Accept different shapes: key_code:int or key_name:str
-            sym = None
-            if "key_code" in data:
+            def _send(obj):
                 try:
-                    sym = _map_keycode_int(int(data["key_code"]))
+                    ws.send(json.dumps(obj))
                 except Exception:
-                    sym = None
-            if not sym and "key" in data and isinstance(data["key"], str):
-                sym = _map_keycode_name(data["key"])
-            if not sym and "key_name" in data and isinstance(data["key_name"], str):
-                sym = _map_keycode_name(data["key_name"])
-            if sym:
-                sm.on_sym(sym)
-    except Exception as e:
-        _log("WARN", f"HA WS: loop error: {e}")
-    finally:
-        try:
-            ws.close()
-        except Exception:
-            pass
+                    pass
+
+            # auth
+            _ = ws.recv()
+            # refresh token each loop from options (in case it changed)
+            token = (_read_options().get("ha_token") or token0)
+            _send({"type":"auth", "access_token": token})
+            _ = ws.recv()  # auth_ok
+
+            # subscribe
+            event_type = (_read_options().get("ha_event_type") or event_type_key)
+            _send({"id": 1, "type": "subscribe_events", "event_type": event_type})
+            _log("INFO", f"HA WS: subscribed to {event_type}")
+
+            while True:
+                raw = ws.recv()
+                if not raw:
+                    raise RuntimeError("WS closed")
+                try:
+                    msg = json.loads(raw)
+                except Exception:
+                    continue
+                if msg.get("type") != "event":
+                    continue
+                data = ((msg.get("event") or {}).get("data") or {})
+                sym = None
+                if "key_code" in data:
+                    try: sym = _map_keycode_int(int(data["key_code"]))
+                    except Exception: sym = None
+                if not sym and isinstance(data.get("key"), str):
+                    sym = _map_keycode_name(data["key"])
+                if not sym and isinstance(data.get("key_name"), str):
+                    sym = _map_keycode_name(data["key_name"])
+                if sym:
+                    sm.on_sym(sym)
+
+        except Exception as e:
+            _log("WARN", f"HA WS: loop error, will reconnect: {e}")
+            try:
+                ws.close()
+            except Exception:
+                pass
+            time.sleep(min(30.0, backoff))
+            backoff = min(30.0, backoff * 1.6)
+            continue
 
 def start_keypad_listener():
     opts = _read_options()
@@ -988,10 +1004,423 @@ def ping():
 
 @app.get("/", response_class=HTMLResponse)
 def root_ui():
-    # (unchanged UI HTML, omitted here for brevity in commentary; keep your original UI)
-    # For full replacement, reuse your existing HTML block exactly as before.
-    # To stay within limits, we keep UI identical to your provided version:
-    return HTMLResponse("""REPLACED_BY_SAME_HTML_AS_BEFORE""")
+    return HTMLResponse("""
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>WMPS</title>
+  <style>
+  
+:root{
+  --bg:#0b1220; --surface:#0f172a; --card:#111a2e;
+  --muted:#9fb2c6; --text:#eaf1f8; --line:#24324f;
+  --ok:#22c55e; --warn:#f59e0b; --err:#ef4444;
+  --accent:#3b82f6; --accent-2:#1e40af;
+  --radius-xs:10px; --radius:14px;
+  --shadow-1:0 10px 28px rgba(0,0,0,.28);
+  --shadow-2:0 6px 14px rgba(0,0,0,.18);
+  --ring:0 0 0 3px rgba(59,130,246,.35);
+}
+
+*{ box-sizing:border-box }
+html,body{ height:100% }
+body{
+  margin:0; padding:24px;
+  background:var(--bg); color:var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+  line-height:1.55;
+}
+
+h2{
+  margin:4px auto 20px auto; max-width:1280px;
+  font-weight:800; letter-spacing:.2px;
+}
+
+.grid{
+  display:grid;
+  grid-template-columns: 1.25fr 1fr;
+  grid-auto-rows: auto;
+  grid-auto-flow: row dense;
+  gap:12px;
+  align-items:start;
+  max-width:1280px; margin:0 auto;
+}
+
+.grid > .card:nth-of-type(3){ grid-column:1; grid-row:1; }
+.grid > .card:nth-of-type(4){ grid-column:2; grid-row:1 / span 3; }
+.grid > .card:nth-of-type(5){ grid-column:1; grid-row:2; }
+.grid > .card:nth-of-type(6){ grid-column:1; grid-row:3; }
+.grid > .card:nth-of-type(1){ grid-column:1 / -1; grid-row:4; }
+.grid > .card:nth-of-type(2){ grid-column:1 / -1; grid-row:5; }
+
+@media (max-width:1024px){
+  .grid{ grid-template-columns:1fr; }
+  .grid > .card:nth-of-type(3){ grid-column:1; grid-row:1; }
+  .grid > .card:nth-of-type(5){ grid-column:1; grid-row:2; }
+  .grid > .card:nth-of-type(6){ grid-column:1; grid-row:3; }
+  .grid > .card:nth-of-type(4){ grid-column:1; grid-row:4; }
+  .grid > .card:nth-of-type(1){ grid-column:1; grid-row:5; }
+  .grid > .card:nth-of-type(2){ grid-column:1; grid-row:6; }
+}
+
+.card{
+  background:linear-gradient(180deg, rgba(20,29,50,.70), rgba(17,26,46,.92));
+  backdrop-filter:blur(6px);
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  padding:12px;
+  box-shadow:var(--shadow-1);
+  align-self:start;
+}
+.card h3{ margin:0 0 8px 0; font-size:18px; font-weight:700 }
+
+label{ display:block; margin:6px 0 6px 2px; font-size:12px; color:var(--muted) }
+input{
+  width:100%; padding:10px 12px; border-radius:var(--radius-xs);
+  border:1px solid var(--line); background:#0c1628; color:#eaf1f8;
+  outline:none; transition: border-color .15s, box-shadow .15s, background .15s;
+}
+input::placeholder{ color:#7d94ad }
+input:hover{ border-color:#35507b }
+input:focus-visible{ border-color:var(--accent); box-shadow:var(--ring); background:#0d1a30 }
+
+button{
+  background:linear-gradient(180deg,var(--accent),var(--accent-2));
+  color:#fff; border:0; border-radius:var(--radius-xs);
+  padding:9px 12px; cursor:pointer;
+  box-shadow:var(--shadow-2);
+  transition: transform .06s, filter .15s, box-shadow .15s;
+}
+button:hover{ filter:brightness(1.05) }
+button:active{ transform:translateY(1px) }
+button:focus-visible{ box-shadow:var(--ring) }
+button:disabled{ opacity:.6; cursor:not-allowed; filter:grayscale(.2) }
+button.btn-secondary{ background:linear-gradient(180deg,#64748b,#334155) }
+button.btn-ghost{ background:transparent; border:1px solid var(--line) }
+button.btn-danger{ background:linear-gradient(180deg,#ef4444,#7f1d1d) }
+
+.row{ display:grid; grid-template-columns:1fr 1fr; gap:8px }
+@media (max-width:560px){ .row{ grid-template-columns:1fr } }
+.muted{ color:#9fb2c6; font-size:12px }
+
+table{
+  width:100%; border-collapse:separate; border-spacing:0;
+  border:1px solid var(--line); background:#0c1628; border-radius:10px;
+  overflow:hidden;
+}
+thead th{
+  position:sticky; top:0; z-index:1; text-align:left;
+  padding:10px; font-size:12px; color:var(--muted);
+  background:#0f1a2b; backdrop-filter:blur(4px);
+}
+tbody td{
+  padding:9px 10px; border-top:1px solid var(--line); font-size:13px; vertical-align:middle;
+  word-break:break-word;
+}
+tbody tr:nth-child(even){ background:rgba(255,255,255,.02) }
+tbody tr:hover{ background:#0f1a2b }
+
+#machines{ max-height:none; overflow:visible; padding:0; margin-top:6px; }
+#history{ max-height: clamp(220px, 42vh, 520px); overflow:auto; }
+#users, #csv{ max-height: clamp(120px, 32vh, 320px); overflow:auto; margin-top:6px; }
+
+*::-webkit-scrollbar{ height:10px; width:10px }
+*::-webkit-scrollbar-track{ background:transparent }
+*::-webkit-scrollbar-thumb{
+  background:#2a3b59; border-radius:8px; border:2px solid transparent; background-clip:padding-box;
+}
+*::-webkit-scrollbar-thumb:hover{ background:#35507b }
+
+.pill{
+  display:inline-block; padding:3px 8px; border-radius:999px; font-size:11px;
+  background:#1b2742; color:#d6e9ff; border:1px solid #2b3c5a; white-space:nowrap;
+}
+.pill-ok{ background:#0f2f1d; border-color:#1e5b38; color:#b6f3c8 }
+.pill-idle{ background:#161e33; border-color:#2a3b5a; color:#cfe7ff }
+.pill-err{ background:#2a1414; border-color:#6e2525; color:#ffc1c1 }
+
+#machines table{ border-radius:10px; background:#0c1628 }
+#machines thead th{ padding:10px; font-size:12px }
+#machines tbody td{ padding:8px 10px; font-size:13px }
+#machines tbody tr{ height:36px }
+
+.grid > .card:nth-of-type(6) .row{
+  display:flex !important;
+  gap:8px; flex-wrap:wrap; align-items:center; justify-content:flex-start;
+  margin:6px 0 4px 0;
+}
+.grid > .card:nth-of-type(6) .row > div{ display:contents; }
+.grid > .card:nth-of-type(6) > div:nth-of-type(2){
+  display:flex !important;
+  gap:8px; flex-wrap:wrap; align-items:center; justify-content:flex-start;
+  margin-top:8px !important;
+}
+.grid > .card:nth-of-type(6) > div:nth-of-type(2) button{ margin-left:0 !important; }
+.grid > .card:nth-of-type(6) button{ white-space:nowrap; }
+
+@media (max-width:720px){
+  .card{ padding:12px }
+  thead th, tbody td{ padding:10px }
+}
+a{ color:#9cc4ff; text-decoration:none }
+a:hover{ text-decoration:underline }
+
+  </style>
+</head>
+<body>
+  <h2>WMPS Control Panel</h2>
+  <div class="grid">
+
+    <div class="card">
+      <h3>Machines</h3>
+      <div id="machines"></div>
+      <div class="muted" style="margin-top:8px;">Prices and default durations come from configuration.</div>
+      <button style="margin-top:8px;" onclick="refresh()">Refresh</button>
+    </div>
+
+    <div class="card">
+      <h3>Transaction History</h3>
+      <table id="history"><thead>
+        <tr><th>Time (UTC)</th><th>Tenant</th><th>Machine</th><th>Charged</th><th>Balance After</th><th>Minutes</th><th>Success</th></tr>
+      </thead><tbody></tbody></table>
+      <div class="muted">Showing last 50 entries</div>
+    </div>
+
+    <div class="card">
+      <h3>Add / Update User</h3>
+      <div class="row">
+        <div><label>tenant_code</label><input id="u_code" value="123456"/></div>
+        <div><label>name</label><input id="u_name" placeholder="Full name"/></div>
+      </div>
+      <div class="row">
+        <div><label>balance</label><input id="u_balance" value="100"/></div>
+        <div style="display:flex; align-items:end;"><button onclick="upsert()">Save</button></div>
+      </div>
+      <div style="margin-top:8px;">
+        <button onclick="listAccounts()">List Accounts</button>
+      </div>
+      <pre id="users">{{}}</pre>
+    </div>
+
+    <div class="card">
+      <h3>Settings</h3>
+      <div class="row">
+        <div><label>Washing machines (comma)</label><input id="cfg_wm" placeholder="1,2,3"/></div>
+        <div><label>Dryer machines (comma)</label><input id="cfg_dm" placeholder="4,5,6"/></div>
+      </div>
+      <div class="row">
+        <div><label>Washing default minutes</label><input id="cfg_wmin" placeholder="30"/></div>
+        <div><label>Dryer default minutes</label><input id="cfg_dmin" placeholder="60"/></div>
+      </div>
+      <div class="row">
+        <div><label>Washing price</label><input id="cfg_wp" placeholder="5"/></div>
+        <div><label>Dryer price</label><input id="cfg_dp" placeholder="5"/></div>
+      </div>
+      <div class="row">
+        <div><label>Disabled machines (comma)</label><input id="cfg_disabled" placeholder="e.g. 2,5"/></div>
+        <div></div>
+      </div>
+      <div class="muted">Per-machine override via price_map in options.json</div>
+      <div style="margin-top:8px;">
+        <button onclick="loadConfig()">Load Config</button>
+        <button onclick="saveConfig()" style="margin-left:8px;">Save Config</button>
+      </div>
+      <pre id="cfg_out">{{}}</pre>
+    </div>
+
+    <div class="card">
+      <h3>Quick Charge</h3>
+      <div class="row">
+        <div><label>tenant_code</label><input id="c_tenant" value="123456"/></div>
+        <div><label>machine</label><input id="c_machine" value="1"/></div>
+      </div>
+      <div class="row">
+        <div><label>price (optional)</label><input id="c_price" placeholder="leave blank for category/price_map"/></div>
+        <div><label>minutes (optional)</label><input id="c_minutes" placeholder="leave blank for default minutes"/></div>
+      </div>
+      <div style="margin-top:8px;">
+        <button onclick="simulate()">Simulate/Charge</button>
+        <span class="muted">Honors simulate flag; DI used for availability</span>
+      </div>
+      <pre id="charge_out">{{}}</pre>
+    </div>
+
+    <div class="card">
+  <h3>CSV Files</h3>
+  <div class="row">
+    <div><button onclick="window.location='./download?file=accounts'">Download accounts.csv</button></div>
+    <div><button onclick="window.location='./download?file=transactions'">Download transactions.csv</button></div>
+    <div>
+      <input type="file" id="uploadCsv" accept=".csv" style="display:none" onchange="uploadAuto()"/>
+      <button onclick="document.getElementById('uploadCsv').click()">Upload CSV</button>
+    </div>
+  </div>
+  <div style="margin-top:8px;">
+    <button onclick="cat('accounts','data')">Open accounts (data)</button>
+    <button onclick="cat('transactions','data')" style="margin-left:8px;">Open transactions (data)</button>
+  </div>
+  <pre id="csv">{{}}</pre>
+</div>
+
+
+  </div>
+
+<script>
+function pill2(state, err) {
+  let cls='pill-idle', txt='Available';
+  if (state==='on' || state==='true' || state==='running') { cls='pill-ok'; txt='Busy'; }
+  if (state==='simulated') { cls='pill-idle'; txt='Simulated'; }
+  if (state==='disabled' || err==='disabled') { cls='pill-err'; txt='Disabled'; }
+  if (err && err!=='disabled') { cls='pill-err'; txt='Error'; }
+  return `<span class="pill ${cls}">${txt}</span>`;
+}
+
+async function renderMachines() {
+  const res = await fetch('./machines');
+  const js = await res.json();
+  const list = js.machines || [];
+  let html = '<table><thead><tr><th>ID</th><th>Category</th><th>Switch</th><th>Sensor</th><th>Status</th><th>Price</th><th>Default minutes</th></tr></thead><tbody>';
+  for (const m of list) {
+    html += `<tr>
+      <td>${m.id}</td>
+      <td>${m.category}</td>
+      <td>${m.ha_switch}</td>
+      <td>${m.ha_sensor}</td>
+      <td>${pill2(m.state, m.error)}</td>
+      <td>${m.price}</td>
+      <td>${m.default_minutes}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  document.getElementById('machines').innerHTML = html;
+}
+
+async function renderHistory() {
+  const res = await fetch('./history?limit=50');
+  const js = await res.json();
+  const tbody = document.querySelector('#history tbody');
+  tbody.innerHTML = '';
+  for (const r of (js.items || [])) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${r.timestamp}</td>
+      <td>${r.tenant_code}</td>
+      <td>${r.machine_number}</td>
+      <td>${r.amount_charged}</td>
+      <td>${r.balance_after}</td>
+      <td>${r.cycle_minutes}</td>
+      <td>${r.success}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+async function upsert() {
+  const body = {
+    tenant_code: document.getElementById('u_code').value.trim(),
+    name: document.getElementById('u_name').value.trim(),
+    balance: parseFloat(document.getElementById('u_balance').value.trim()||'0')
+  };
+  const res = await fetch('./accounts/upsert', { method:'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  const js = await res.json();
+  document.getElementById('users').textContent = JSON.stringify(js, null, 2);
+}
+
+async function listAccounts() {
+  const res = await fetch('./accounts/list');
+  const js = await res.json();
+  document.getElementById('users').textContent = JSON.stringify(js, null, 2);
+}
+
+async function loadConfig() {
+  const res = await fetch('./config');
+  const js = await res.json();
+  document.getElementById('cfg_out').textContent = JSON.stringify(js, null, 2);
+  document.getElementById('cfg_wm').value = (js.washing_machines||[]).join(',');
+  document.getElementById('cfg_dm').value = (js.dryer_machines||[]).join(',');
+  document.getElementById('cfg_wmin').value = js.washing_minutes||30;
+  document.getElementById('cfg_dmin').value = js.dryer_minutes||60;
+  document.getElementById('cfg_wp').value = js.price_washing||5;
+  document.getElementById('cfg_dp').value = js.price_dryer||5;
+  document.getElementById('cfg_disabled').value = (js.disabled_machines||[]).join(',');
+}
+
+async function saveConfig() {
+  const wm = document.getElementById('cfg_wm').value.split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n));
+  const dm = document.getElementById('cfg_dm').value.split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n));
+  const body = {
+    washing_machines: wm, dryer_machines: dm,
+    washing_minutes: parseInt(document.getElementById('cfg_wmin').value||'30'),
+    dryer_minutes: parseInt(document.getElementById('cfg_dmin').value||'60'),
+    price_washing: parseFloat(document.getElementById('cfg_wp').value||'5'),
+    price_dryer: parseFloat(document.getElementById('cfg_dp').value||'5'),
+    disabled_machines: document.getElementById('cfg_disabled').value.split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n))
+  };
+  const res = await fetch('./config', { method:'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  const js = await res.json();
+  document.getElementById('cfg_out').textContent = JSON.stringify(js, null, 2);
+  await renderMachines();
+}
+
+async function simulate() {
+  const t = document.getElementById('c_tenant').value.trim();
+  const m = document.getElementById('c_machine').value.trim();
+  const p = document.getElementById('c_price').value.trim();
+  const mins = document.getElementById('c_minutes').value.trim();
+  const params = new URLSearchParams({ tenant_code: t, machine: m });
+  if (p) params.set('price', p);
+  if (mins) params.set('minutes', mins);
+  const res = await fetch('./simulate/charge?' + params.toString());
+  const txt = await res.text();
+  document.getElementById('charge_out').textContent = txt;
+  await renderHistory();
+}
+
+async function cat(file, where) {
+  const res = await fetch(`./debug/cat?file=${file}&where=${where}`);
+  const txt = await res.text();
+  document.getElementById('csv').textContent = txt;
+}
+
+async function uploadAuto() {
+  const input = document.getElementById('uploadCsv');
+  const file = input.files[0];
+  if (!file) { alert('No file selected'); return; }
+
+  // read file as raw bytes (no multipart needed)
+  const buf = await file.arrayBuffer();
+
+  const res = await fetch('./upload_auto', {
+    method: 'PUT',
+    body: buf
+  });
+
+  if (!res.ok) {
+    const txt = await res.text();
+    alert('Upload failed: ' + txt);
+    return;
+  }
+
+  const js = await res.json();
+  // js.target is "accounts" or "transactions"
+  alert(`Uploaded as ${js.target}.csv (${js.bytes} bytes)`);
+
+  // refresh preview and history
+  await cat(js.target, 'data');
+  await renderHistory();
+
+  // clear input so the same filename can be re-uploaded later
+  input.value = '';
+}
+
+
+
+async function refresh() { await renderMachines(); await renderHistory(); }
+refresh(); loadConfig();
+</script>
+</body>
+</html>
+""")
 
 @app.get("/machines")
 def machines():
@@ -1010,7 +1439,7 @@ def machines():
         if not machine_enabled(mid, opts):
             state = "disabled"
         else:
-            if opts.get("adam_host") is not None and di is not None:
+            if ((opts.get("adam_host") or "").strip()) and di is not None:
                 di_state = _adam_read_di(di, opts)
                 if di_state is not None:
                     state = "on" if di_state else "off"
@@ -1019,7 +1448,7 @@ def machines():
             else:
                 state = _get_state(sensor, opts) if opts.get("ha_token") else ("simulated" if opts.get("simulate") else "unknown")
 
-        err = ("disabled" if not machine_enabled(mid, opts) else ("" if (opts.get("simulate") or opts.get("ha_token") or opts.get("adam_host")) else "no_token"))
+        err = ("disabled" if not machine_enabled(mid, opts) else ("" if (opts.get("simulate") or opts.get("ha_token") or (opts.get("adam_host") or "").strip()) else "no_token"))
         out.append({
             "id": mid,
             "category": "washing" if mid in wm else "dryer",
