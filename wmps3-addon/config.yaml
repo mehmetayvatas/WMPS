@@ -1,0 +1,145 @@
+name: WMPS 3
+slug: wmps3
+version: "0.2.3"
+description: Cashless laundry payment system (WMPS) — simulate & per-machine toggles
+url: https://example.com/wmps3
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+  - i386
+
+startup: services
+init: false
+
+# Ingress: expose UI/API inside Home Assistant without editing HA config files
+ingress: true
+ingress_port: 8000
+ingress_stream: true
+
+# Persistent/shared storage
+map:
+  - share:rw
+
+# USB keypad access from the add-on container
+devices:
+  - /dev/input:/dev/input:rwm
+udev: true
+
+# Optional: open a direct TCP port (not needed when using Ingress)
+# ports:
+#   8000/tcp: 8000
+
+options:
+  # Home Assistant API access (supervisor/core is ideal inside HA OS)
+  ha_url: "http://supervisor/core"
+  ha_token: ""
+
+  # TTS (optional)
+  tts_service: "tts.speak"
+  media_player: ""
+
+  # ADAM 6050 (only if you plan to drive hardware directly; HA entities are preferred)
+  adam_host: "192.168.1.101"
+  adam_port: 502
+  adam_unit_id: 1
+
+  # Safe default: start in simulate mode
+  simulate: true
+
+  # Defaults by machine category
+  washing_minutes: 30
+  dryer_minutes: 60
+  price_washing: 5.0
+  price_dryer: 5.0
+
+  # DI confirmation timeout after activation (seconds)
+  activation_confirm_timeout_s: 5
+
+  # Keypad security/lock settings
+  security:
+    code_entry_timeout_s: 30
+    max_failed_attempts: 5
+    lockout_seconds: 120
+
+  # Top-level enable/disable flags
+  machine_1_enabled: true
+  machine_2_enabled: true
+  machine_3_enabled: true
+  machine_4_enabled: true
+  machine_5_enabled: true
+  machine_6_enabled: true
+
+  # Machine mapping — recommended: use Home Assistant entities
+  # Alternative: drive ADAM relays directly by providing "relay"
+  machines:
+    - id: 1
+      enabled: true
+      ha_switch: switch.washer_1_control
+      ha_sensor: binary_sensor.washer_1_status
+      # relay: 0
+    - id: 2
+      enabled: true
+      ha_switch: switch.washer_2_control
+      ha_sensor: binary_sensor.washer_2_status
+      # relay: 1
+    - id: 3
+      enabled: true
+      ha_switch: switch.washer_3_control
+      ha_sensor: binary_sensor.washer_3_status
+      # relay: 2
+    - id: 4
+      enabled: true
+      ha_switch: switch.dryer_4_control
+      ha_sensor: binary_sensor.dryer_4_status
+      # relay: 3
+    - id: 5
+      enabled: true
+      ha_switch: switch.dryer_5_control
+      ha_sensor: binary_sensor.dryer_5_status
+      # relay: 4
+    - id: 6
+      enabled: true
+      ha_switch: switch.dryer_6_control
+      ha_sensor: binary_sensor.dryer_6_status
+      # relay: 5
+
+schema:
+  ha_url: str
+  ha_token: password
+
+  tts_service: str?
+  media_player: str?
+
+  adam_host: str?
+  adam_port: int?
+  adam_unit_id: int?
+
+  simulate: bool
+
+  washing_minutes: int
+  dryer_minutes: int
+  price_washing: float
+  price_dryer: float
+
+  activation_confirm_timeout_s: int
+
+  security:
+    code_entry_timeout_s: int
+    max_failed_attempts: int
+    lockout_seconds: int
+
+  machine_1_enabled: bool
+  machine_2_enabled: bool
+  machine_3_enabled: bool
+  machine_4_enabled: bool
+  machine_5_enabled: bool
+  machine_6_enabled: bool
+
+  machines:
+    - id: int
+      enabled: bool
+      ha_switch: str?
+      ha_sensor: str?
+      relay: int?
