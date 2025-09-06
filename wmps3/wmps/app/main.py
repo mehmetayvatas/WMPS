@@ -758,7 +758,7 @@ class KeypadStateMachine:
         sec = ((opts.get("security") or {}).get("code_entry_timeout_s"))
         return int(sec or 30)
 
-    def on_sym(self, sym: str):
+    def on_sym(self, sym: str) -> None:
         now = time.monotonic()
         if now - self.last_input > self._timeout_s() and self.state != "IDLE":
             self._reset()
@@ -775,11 +775,14 @@ class KeypadStateMachine:
                 self.state = "ENTER_CODE"
                 self.buf_code = sym
                 self.speak("Enter your 6 digit code.")
-        elif self.state == "ENTER_CODE":
+            return
+
+        if self.state == "ENTER_CODE":
             if sym.isdigit():
                 if len(self.buf_code) < 6:
                     self.buf_code += sym
-            elif sym == "ENTER":
+                return
+            if sym == "ENTER":
                 if len(self.buf_code) == 6:
                     accounts = read_accounts()
                     if self.buf_code not in accounts:
@@ -790,7 +793,9 @@ class KeypadStateMachine:
                     self.speak("Code accepted. Please select machine one through six.")
                 else:
                     self.speak("Code must be 6 digits.")
-        elif self.state == "SELECT_MACHINE":
+            return
+
+        if self.state == "SELECT_MACHINE":
             if sym.isdigit():
                 n = int(sym)
                 if 1 <= n <= 6:
@@ -798,7 +803,9 @@ class KeypadStateMachine:
                     mins = _default_minutes_for(str(n), self.opts_provider())
                     self.speak(f"Machine {n} selected for {mins} minutes. Press enter to confirm.")
                     self.state = "CONFIRM"
-        elif self.state == "CONFIRM":
+            return
+
+        if self.state == "CONFIRM":
             if sym == "ENTER":
                 try:
                     self.handle_charge(
@@ -811,25 +818,32 @@ class KeypadStateMachine:
                     self.speak("Payment accepted. Starting the cycle.")
                 except HTTPException as e:
                     msg = str(e.detail)
-                    if e.status_code == 409: msg = "Machine is busy."
-                    elif e.status_code == 402: msg = "Insufficient balance."
-                    elif e.status_code == 423: msg = "Machine disabled."
-                    elif e.status_code == 404: msg = "User not found."
+                    if e.status_code == 409:
+                        msg = "Machine is busy."
+                    elif e.status_code == 402:
+                        msg = "Insufficient balance."
+                    elif e.status_code == 423:
+                        msg = "Machine disabled."
+                    elif e.status_code == 404:
+                        msg = "User not found."
                     self.speak(msg)
                 except Exception:
                     self.speak("Operation failed.")
                 finally:
                     self._reset()
 
-    def _reset(self):
+    def _reset(self) -> None:
         self.state = "IDLE"
-               self.buf_code = ""
+        self.buf_code = ""
         self.sel_machine = None
         self.last_input = time.monotonic()
 
+
+
 # Key mapping helpers
-_MAIN_ROW_NUM = {2:"1",3:"2",4:"3",5:"4",6:"5",7:"6",8:"7",9:"8",10:"9",11:"0"}  # KEY_1..KEY_0
-_KP_NUM = {79:"1",80:"2",81:"3",75:"4",76:"5",77:"6",71:"7",72:"8",73:"9",82:"0"}  # KP1..KP0
+_MAIN_ROW_NUM = {2: "1", 3: "2", 4: "3", 5: "4", 6: "5", 7: "6", 8: "7", 9: "8", 10: "9", 11: "0"}  # KEY_1..KEY_0
+_KP_NUM = {79: "1", 80: "2", 81: "3", 75: "4", 76: "5", 77: "6", 71: "7", 72: "8", 73: "9", 82: "0"}  # KP1..KP0
+
 def _map_keycode_name(name: str) -> Optional[str]:
     # Convert raw key names to symbols used by KeypadStateMachine
     if not name:
@@ -837,9 +851,9 @@ def _map_keycode_name(name: str) -> Optional[str]:
     k = name
     if k.startswith("KEY_"):
         k = k[4:]
-    if k in ("ENTER","KPENTER"):
+    if k in ("ENTER", "KPENTER"):
         return "ENTER"
-    if k in ("KPASTERISK","ESC","BACKSPACE"):
+    if k in ("KPASTERISK", "ESC", "BACKSPACE"):
         return "CANCEL"
     if k in ("HASHTAG",):
         return "ENTER"
@@ -847,7 +861,7 @@ def _map_keycode_name(name: str) -> Optional[str]:
         return k[2]
     if len(k) == 1 and k.isdigit():
         return k
-    if len(k) == 2 and k[0] == 'F' and k[1].isdigit():
+    if len(k) == 2 and k[0] == "F" and k[1].isdigit():
         return None
     return None
 
@@ -860,9 +874,10 @@ def _map_keycode_int(code: int) -> Optional[str]:
         return "ENTER"
     if code in (1, 14, 111):  # Esc, Backspace, Delete -> cancel
         return "CANCEL"
-    if code in (43,):  # '#'/non-us? fallback treat as ENTER
+    if code in (43,):  # '#' fallback -> ENTER
         return "ENTER"
     return None
+
 
 # EVDEV thread
 def _evdev_thread():
@@ -880,99 +895,100 @@ def _evdev_thread():
         if event.type == ecodes.EV_KEY:
             key = categorize(event)
             if key.keystate == key.key_down:
-                name = key.keycode if isinstance(key.keycode, str) else (key.keycode[0] if isinstance(key.keycode, (list, tuple)) and key.keycode else "")
+                name = key.keycode if isinstance(key.keycode, str) else (
+                    key.keycode[0] if isinstance(key.keycode, (list, tuple)) and key.keycode else ""
+                )
                 sym = _map_keycode_name(name)
                 if sym:
                     sm.on_sym(sym)
 
 def _find_keypad_device(patterns=("event*",)):
-    for path in glob.glob("/dev/input/" + patterns[0]):
+    for p in glob.glob("/dev/input/" + patterns[0]):
         try:
-            dev = InputDevice(path)
+            dev = InputDevice(p)
             if "Keyboard" in (dev.name or "") or "Keypad" in (dev.name or ""):
                 return dev.path
         except Exception:
             pass
     return None
 
-# HA WebSocket helpers
+
+# HA WebSocket thread
 def _derive_ws_url(http_url: Optional[str]) -> Optional[str]:
-    if not http_url: return None
+    if not http_url:
+        return None
     u = http_url.strip().rstrip("/")
-    if u.startswith("https://"): return "wss://" + u[len("https://"):] + "/api/websocket"
-    if u.startswith("http://"):  return "ws://"  + u[len("http://"):]  + "/api/websocket"
+    if u.startswith("https://"):
+        return "wss://" + u[len("https://"):] + "/api/websocket"
+    if u.startswith("http://"):
+        return "ws://" + u[len("http://"):] + "/api/websocket"
     return u  # assume already ws(s)
 
 def _ha_ws_thread():
     if not _HAS_WS:
         _log("WARN", "websocket-client not available; keypad_source=ha cannot start")
         return
-    opts0 = _read_options()
-    token0 = opts0.get("ha_token") or ""
-    if not token0:
+    opts = _read_options()
+    token = opts.get("ha_token") or ""
+    if not token:
         _log("WARN", "HA WS: missing ha_token")
         return
-    base_url0 = opts0.get("ha_url") or "http://supervisor/core"
-    ws_url0 = opts0.get("ha_ws_url") or _derive_ws_url(base_url0)
-    event_type_key = opts0.get("ha_event_type") or "keyboard_remote_command_received"
+    ws_url = opts.get("ha_ws_url") or _derive_ws_url(opts.get("ha_url") or "http://supervisor/core")
+    event_type = opts.get("ha_event_type") or "keyboard_remote_command_received"
     sm = KeypadStateMachine(opts_provider=_read_options, speak_fn=speak, handle_charge_fn=_handle_charge)
 
-    backoff = 1.0
-    while True:
+    try:
+        ws = websocket.create_connection(ws_url, timeout=8)  # type: ignore
+    except Exception as e:
+        _log("WARN", f"HA WS: connection failed: {e}")
+        return
+
+    def _send(obj):
         try:
-            ws = websocket.create_connection(ws_url0, timeout=8)  # type: ignore
-            _log("INFO", f"HA WS: connected {ws_url0}")
-            backoff = 1.0  # reset on success
+            ws.send(json.dumps(obj))
+        except Exception:
+            pass
 
-            def _send(obj):
-                try:
-                    ws.send(json.dumps(obj))
-                except Exception:
-                    pass
+    try:
+        # Expect auth_required -> auth_ok
+        _ = ws.recv()
+        _send({"type": "auth", "access_token": token})
+        _ = ws.recv()
+        # Subscribe to events
+        _send({"id": 1, "type": "subscribe_events", "event_type": event_type})
+        _log("INFO", f"HA WS: subscribed to {event_type}")
 
-            # auth
-            _ = ws.recv()
-            # refresh token each loop from options (in case it changed)
-            token = (_read_options().get("ha_token") or token0)
-            _send({"type":"auth", "access_token": token})
-            _ = ws.recv()  # auth_ok
-
-            # subscribe
-            event_type = (_read_options().get("ha_event_type") or event_type_key)
-            _send({"id": 1, "type": "subscribe_events", "event_type": event_type})
-            _log("INFO", f"HA WS: subscribed to {event_type}")
-
-            while True:
-                raw = ws.recv()
-                if not raw:
-                    raise RuntimeError("WS closed")
-                try:
-                    msg = json.loads(raw)
-                except Exception:
-                    continue
-                if msg.get("type") != "event":
-                    continue
-                data = ((msg.get("event") or {}).get("data") or {})
-                sym = None
-                if "key_code" in data:
-                    try: sym = _map_keycode_int(int(data["key_code"]))
-                    except Exception: sym = None
-                if not sym and isinstance(data.get("key"), str):
-                    sym = _map_keycode_name(data["key"])
-                if not sym and isinstance(data.get("key_name"), str):
-                    sym = _map_keycode_name(data["key_name"])
-                if sym:
-                    sm.on_sym(sym)
-
-        except Exception as e:
-            _log("WARN", f"HA WS: loop error, will reconnect: {e}")
+        while True:
+            raw = ws.recv()
+            if not raw:
+                break
             try:
-                ws.close()
+                msg = json.loads(raw)
             except Exception:
-                pass
-            time.sleep(min(30.0, backoff))
-            backoff = min(30.0, backoff * 1.6)
-            continue
+                continue
+            if msg.get("type") != "event":
+                continue
+            data = ((msg.get("event") or {}).get("data") or {})
+            sym = None
+            if "key_code" in data:
+                try:
+                    sym = _map_keycode_int(int(data["key_code"]))
+                except Exception:
+                    sym = None
+            if not sym and "key" in data and isinstance(data["key"], str):
+                sym = _map_keycode_name(data["key"])
+            if not sym and "key_name" in data and isinstance(data["key_name"], str):
+                sym = _map_keycode_name(data["key_name"])
+            if sym:
+                sm.on_sym(sym)
+    except Exception as e:
+        _log("WARN", f"HA WS: loop error: {e}")
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
+
 
 def start_keypad_listener():
     opts = _read_options()
@@ -986,10 +1002,12 @@ def start_keypad_listener():
     else:  # auto
         if _HAS_EVDEV and _find_keypad_device():
             _log("INFO", "keypad_source=auto -> using evdev")
-            t = threading.Thread(target=_evdev_thread, daemon=True); t.start()
+            t = threading.Thread(target=_evdev_thread, daemon=True)
+            t.start()
         else:
             _log("INFO", "keypad_source=auto -> using ha websocket")
-            t = threading.Thread(target=_ha_ws_thread, daemon=True); t.start()
+            t = threading.Thread(target=_ha_ws_thread, daemon=True)
+            t.start()
 
 # ----------------------- Models & API --------------------
 @app.on_event("startup")
