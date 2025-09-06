@@ -1,10 +1,10 @@
-
 """
 Configuration loader for the Washing Machine Payment System
 - Primary source: /data/options.json (HA Add-on Options UI)
 - Fallback: configs/config.yaml (for local dev)
 - Supports top-level toggles: machine_1_enabled .. machine_6_enabled
   and merges them into machines[*].enabled so the app enforces them.
+- Adds support for ADAM DO/DI, HA-keypad events, and per-machine mapping.
 """
 
 from __future__ import annotations
@@ -18,25 +18,50 @@ from pydantic import BaseModel, ValidationError, Field
 from app.utils import logger
 
 
+# ----------------------------
+# Pydantic models (Pydantic v2)
+# ----------------------------
 class AdamConfig(BaseModel):
     enabled: bool = False
     host: str = "192.168.1.101"
     port: int = 502
     unit_id: int = 1
+    do_mode: Optional[str] = None       # "pulse" | "hold"
+    pulse_seconds: Optional[float] = None
+    invert_di: Optional[bool] = None
+    activation_confirm_timeout_s: Optional[int] = None
 
 
 class HAConfig(BaseModel):
     enabled: bool = False
     base_url: str = "http://supervisor/core"
+    ws_url: Optional[str] = None
     token: str = ""
-    tts_service: str = "speak"
+    tts_service: str = "tts.speak"
     media_player: str = "media_player.vlc_telnet"
+    keypad_source: Optional[str] = None          # "ha" | "evdev" | "auto"
+    ha_event_type: Optional[str] = None          # keyboard_remote_command_received
+    confirm_keys: Optional[List[int]] = None     # [28, 96] default at normalize
 
 
 class MachineListItem(BaseModel):
     id: int
-    relay: int
-    enabled: bool = True  # default True if not provided
+    enabled: bool = True
+
+    # Labels & pricing
+    label: Optional[str] = None
+    cycle_minutes: Optional[int] = None
+    price: Optional[float] = None
+
+    # HA entity route (optional)
+    ha_switch: Optional[str] = None
+    ha_sensor: Optional[str] = None
+
+    # ADAM mapping (optional)
+    relay: Optional[int] = None
+    di: Optional[int] = None
+    do_mode: Optional[str] = None
+    invert_di: Optional[bool] = None
 
 
 class MachineConfig(BaseModel):
@@ -51,23 +76,41 @@ class SecurityConfig(BaseModel):
 
 
 class AppConfig(BaseModel):
-    # Flat/common
+    # ---- Flat/common (add-on options.json) ----
     ha_url: Optional[str] = None
+    ha_ws_url: Optional[str] = None
     ha_token: Optional[str] = None
-    adam_host: Optional[str] = None
-    adam_port: Optional[int] = None
-    adam_unit_id: Optional[int] = 1
     tts_service: Optional[str] = None
     media_player: Optional[str] = None
 
-    simulate: bool = False
-    price_per_cycle: int = 30
+    keypad_source: Optional[str] = None
+    ha_event_type: Optional[str] = None
+    confirm_keys: Optional[List[int]] = None
 
-    # Two styles for machines
-    machines: List[MachineListItem] | None = None           # options.json list style
+    adam_host: Optional[str] = None
+    adam_port: Optional[int] = None
+    adam_unit_id: Optional[int] = 1
+    do_mode: Optional[str] = None
+    pulse_seconds: Optional[float] = None
+    invert_di: Optional[bool] = None
+    activation_confirm_timeout_s: Optional[int] = None
+
+    simulate: bool = False
+
+    # Category defaults
+    washing_minutes: Optional[int] = None
+    dryer_minutes: Optional[int] = None
+    price_washing: Optional[float] = None
+    price_dryer: Optional[float] = None
+
+    # Legacy single price (kept for backward compat; prefer price_* above)
+    price_per_cycle: Optional[int] = None
+
+    # Machines
+    machines: List[MachineListItem] | None = None            # options.json list style
     machines_yaml: Dict[str, MachineConfig] = Field(default_factory=dict)  # yaml dict style
 
-    # Legacy nested (yaml)
+    # Legacy nested blocks
     adam: AdamConfig | None = None
     ha: HAConfig | None = None
     security: SecurityConfig = SecurityConfig()
@@ -77,9 +120,24 @@ class AppConfig(BaseModel):
     transactions_file: str = "/data/transactions.csv"
 
 
+# ----------------------------
+# Normalization helpers
+# ----------------------------
+def _derive_ws_url_from_http(http_url: Optional[str]) -> Optional[str]:
+    if not http_url:
+        return None
+    url = http_url.strip().rstrip("/")
+    if url.startswith("https://"):
+        return "wss://" + url[len("https://"):] + "/api/websocket"
+    if url.startswith("http://"):
+        return "ws://" + url[len("http://"):] + "/api/websocket"
+    # fallback: assume already ws(s)
+    return url + "/api/websocket"
+
+
 def _apply_machine_toggles(norm: Dict[str, Any]) -> None:
-    """Merge top-level machine_N_enabled switches into machines list."""
-    # Collect top-level toggles if present
+    """Merge top-level machine_N_enabled switches into machines list and
+    ensure relay/di defaults if entries are auto-created."""
     toggles: Dict[int, bool] = {}
     for i in range(1, 7):
         key = f"machine_{i}_enabled"
@@ -88,18 +146,15 @@ def _apply_machine_toggles(norm: Dict[str, Any]) -> None:
                 toggles[i] = bool(norm[key])
             except Exception:
                 pass
-
-    # Nothing to do?
     if not toggles:
         return
 
-    # Ensure machines list exists
     machines = norm.get("machines")
     if not isinstance(machines, list):
         machines = []
         norm["machines"] = machines
 
-    # Index by id for quick update
+    # Index by id for updates
     by_id: Dict[int, Dict[str, Any]] = {}
     for m in machines:
         try:
@@ -107,48 +162,79 @@ def _apply_machine_toggles(norm: Dict[str, Any]) -> None:
         except Exception:
             continue
         if mid:
-            by_id[mid] = m  # keep original dict reference
+            by_id[mid] = m  # keep ref
 
-    # Apply toggles; create entry if missing (relay defaults to id-1)
+    # Apply; create item if missing with safe defaults (relay/di = id-1)
     for mid, enabled in toggles.items():
         if mid in by_id:
-            if isinstance(by_id[mid], dict):
-                by_id[mid]["enabled"] = enabled
+            entry = by_id[mid]
+            if isinstance(entry, dict):
+                entry["enabled"] = enabled
+                if entry.get("relay") is None:
+                    entry["relay"] = mid - 1
+                if entry.get("di") is None:
+                    entry["di"] = mid - 1
             else:
-                # unexpected object; replace with dict
-                by_id[mid] = {"id": mid, "relay": mid - 1, "enabled": enabled}
+                # Unexpected object; replace minimal dict
+                by_id[mid] = {"id": mid, "relay": mid - 1, "di": mid - 1, "enabled": enabled}
         else:
-            machines.append({"id": mid, "relay": mid - 1, "enabled": enabled})
+            machines.append({"id": mid, "relay": mid - 1, "di": mid - 1, "enabled": enabled})
 
 
 def _normalize_sources(raw: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize raw dict to AppConfig-compatible keys regardless of source style."""
     norm = dict(raw)
 
-    # Map YAML style 'machines' dict -> machines_yaml
+    # YAML style 'machines' dict -> machines_yaml
     if isinstance(norm.get("machines"), dict):
         norm["machines_yaml"] = norm.get("machines")
         norm["machines"] = None
 
-    # Promote nested YAML blocks
+    # Promote nested YAML blocks (legacy)
     if isinstance(norm.get("adam"), dict):
         a = norm["adam"]
         norm.setdefault("adam_host", a.get("host"))
         norm.setdefault("adam_port", a.get("port"))
         norm.setdefault("adam_unit_id", a.get("unit_id", 1))
+        # Optional ADAM extras
+        for k in ("do_mode", "pulse_seconds", "invert_di", "activation_confirm_timeout_s"):
+            if a.get(k) is not None:
+                norm.setdefault(k, a.get(k))
+
     if isinstance(norm.get("ha"), dict):
         h = norm["ha"]
         norm.setdefault("ha_url", h.get("base_url"))
+        norm.setdefault("ha_ws_url", h.get("ws_url"))
         norm.setdefault("ha_token", h.get("token"))
         norm.setdefault("tts_service", h.get("tts_service"))
         norm.setdefault("media_player", h.get("media_player"))
+        if h.get("keypad_source") is not None:
+            norm.setdefault("keypad_source", h.get("keypad_source"))
+        if h.get("ha_event_type") is not None:
+            norm.setdefault("ha_event_type", h.get("ha_event_type"))
+        if h.get("confirm_keys") is not None:
+            norm.setdefault("confirm_keys", h.get("confirm_keys"))
+
+    # Derive ha_ws_url if missing but ha_url exists
+    if not norm.get("ha_ws_url") and norm.get("ha_url"):
+        norm["ha_ws_url"] = _derive_ws_url_from_http(norm.get("ha_url"))
+
+    # Default keypad fields if still missing
+    norm.setdefault("keypad_source", "ha")
+    norm.setdefault("ha_event_type", "keyboard_remote_command_received")
+    norm.setdefault("confirm_keys", [28, 96])  # Enter & KP_Enter
 
     # Merge top-level machine toggles into machines list
     _apply_machine_toggles(norm)
 
+    # Backward compat: if per-category minutes/prices yoksa tekil price_per_cycle'ı kullanma
+    # (Uygulama tarafı bu alanları kontrol etmeli)
     return norm
 
 
+# ----------------------------
+# Logging
+# ----------------------------
 def _log_summary(cfg: AppConfig, source: str) -> None:
     try:
         if cfg.machines is not None:
@@ -159,10 +245,19 @@ def _log_summary(cfg: AppConfig, source: str) -> None:
         m = "unknown"
 
     logger.info("[WMPS] Configuration loaded from %s", source)
-    logger.info("[WMPS] Summary: simulate=%s, price_per_cycle=%s, machines=%s", cfg.simulate, cfg.price_per_cycle, m or "none")
-    logger.info("[WMPS] Files: accounts=%s, transactions=%s", cfg.accounts_file, cfg.transactions_file)
+    logger.info(
+        "[WMPS] Summary: simulate=%s, keypad_source=%s, do_mode=%s, invert_di=%s, machines=%s",
+        cfg.simulate, cfg.keypad_source, cfg.do_mode, cfg.invert_di, m or "none",
+    )
+    logger.info(
+        "[WMPS] Files: accounts=%s, transactions=%s",
+        cfg.accounts_file, cfg.transactions_file
+    )
 
 
+# ----------------------------
+# Public API
+# ----------------------------
 def load_config(path: str | None = None) -> AppConfig:
     options_path = "/data/options.json"
     if os.path.exists(options_path):
