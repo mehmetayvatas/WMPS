@@ -1,6 +1,6 @@
 name: WMPS3
 slug: wmps3
-version: "0.3.7"
+version: "0.3.8"
 description: Cashless laundry payment system (WMPS) — simulate & per-machine toggles with ADAM-6050 and HA-keypad support
 url: https://example.com/wmps3
 arch:
@@ -12,30 +12,27 @@ arch:
 
 startup: services
 init: false
-homeassistant_api: true  
+homeassistant_api: true
 
-# Ingress: expose UI/API inside Home Assistant without editing HA config files
 ingress: true
 ingress_port: 8000
 ingress_stream: true
 
-# Persistent/shared storage
 map:
   - share:rw
   - config:rw
 
-# USB keypad access from the add-on container (for evdev mode)
 devices:
   - /dev/input:/dev/input:rwm
   - /dev/bus/usb:/dev/bus/usb:rwm
 udev: true
 
 options:
-  ha_url: "http://supervisor/core/api"
+  ha_url: "http://supervisor/core"        
   ha_ws_url: "ws://supervisor/core/websocket"
-  ha_token: "" 
+  ha_token: ""                              
 
-  keypad_source: "evdev"
+  keypad_source: "ha"                     
   ha_event_type: "keyboard_remote_command_received"
   confirm_keys:
     - 28
@@ -136,7 +133,7 @@ options:
 schema:
   ha_url: str
   ha_ws_url: str?
-  ha_token: password? 
+  ha_token: password?
 
   keypad_source: list(ha|evdev|auto)?
   ha_event_type: str?
