@@ -1,7 +1,7 @@
 {
-  "ha_url": "http://192.168.1.72:8123",
-  "ha_ws_url": "ws://192.168.1.72:8123/api/websocket",
-  "ha_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkMzE2N2NhYjgwMGU0NjhjOWU0MzdjYjkxODgyZjFkNyIsImlhdCI6MTc1NzE4NTEzMywiZXhwIjoyMDcyNTQ1MTMzfQ.UbgazzUsbpCEI7cRenayLyONFuenHNM5VRpBibj5wGo",
+  "ha_url": "http://supervisor/core/api",
+  "ha_ws_url": "ws://supervisor/core/websocket",
+  "ha_token": "",
 
   "tts_service": "tts.google_translate_speak",
   "media_player": "media_player.vlc_telnet",
