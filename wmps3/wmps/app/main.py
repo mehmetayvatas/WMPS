@@ -891,37 +891,124 @@ def _map_keycode_int(code: int) -> Optional[str]:
 
 # EVDEV thread
 def _evdev_thread():
+    """Listen a physical USB keypad via evdev with auto-reconnect and rich key mapping."""
     if not _HAS_EVDEV:
         _log("WARN", "evdev not available; keypad_source=evdev cannot start")
         return
-    path = _find_keypad_device()
-    if not path:
-        _log("WARN", "No keypad input device found under /dev/input")
-        return
-    dev = InputDevice(path)
+
     sm = KeypadStateMachine(opts_provider=_read_options, speak_fn=speak, handle_charge_fn=_handle_charge)
-    _log("INFO", f"Keypad(evdev) listening on {path} ({getattr(dev, 'name', 'unknown')})")
-    for event in dev.read_loop():
-        if event.type == ecodes.EV_KEY:
-            key = categorize(event)
-            if key.keystate == key.key_down:
-                name = key.keycode if isinstance(key.keycode, str) else (
-                    key.keycode[0] if isinstance(key.keycode, (list, tuple)) and key.keycode else ""
-                )
-                sym = _map_keycode_name(name)
+
+    while True:
+        path = _find_keypad_device()
+        if not path:
+            _log("WARN", "No keypad input device found under /dev/input (will retry in 5s)")
+            time.sleep(5.0)
+            continue
+
+        try:
+            dev = InputDevice(path)
+            _log("INFO", f"Keypad(evdev) listening on {path} ({getattr(dev, 'name', 'unknown')})")
+        except Exception as e:
+            _log("WARN", f"Failed to open input device {path}: {e} (retry in 5s)")
+            time.sleep(5.0)
+            continue
+
+        try:
+            for event in dev.read_loop():
+                # EV_KEY only; value 1 == key down
+                if event.type != ecodes.EV_KEY or getattr(event, "value", None) != 1:
+                    continue
+
+                # Try resolve by key name first (from evdev.categorize)
+                sym = None
+                try:
+                    key = categorize(event)
+                    name = key.keycode if isinstance(key.keycode, str) else (
+                        key.keycode[0] if isinstance(key.keycode, (list, tuple)) and key.keycode else ""
+                    )
+                    sym = _map_keycode_name(name)
+                except Exception:
+                    name = ""
+
+                # Fallback: resolve by numeric code (main row / numpad / enter / cancel)
+                if not sym:
+                    try:
+                        sym = _map_keycode_int(int(event.code))
+                    except Exception:
+                        sym = None
+
+                # Honor confirm_keys from options as extra ENTER codes
+                if not sym:
+                    try:
+                        opts = _read_options()
+                        ckeys = set(int(x) for x in (opts.get("confirm_keys") or []))
+                        if int(event.code) in ckeys:
+                            sym = "ENTER"
+                    except Exception:
+                        pass
+
+                # Debug trace
+                _log("DEBUG", f"evdev keydown code={event.code} name={name or '-'} -> {sym or '-'}")
+
+                # Dispatch to state machine
                 if sym:
                     sm.on_sym(sym)
 
+        except OSError as e:
+            # Device may have been unplugged; loop to reopen
+            _log("WARN", f"Keypad(evdev) device error: {e} (will retry)")
+            try:
+                dev.close()
+            except Exception:
+                pass
+            time.sleep(2.0)
+            continue
+        except Exception as e:
+            _log("WARN", f"Keypad(evdev) loop exception: {e}\n{traceback.format_exc()}")
+            try:
+                dev.close()
+            except Exception:
+                pass
+            time.sleep(2.0)
+            continue
+
 def _find_keypad_device(patterns=("event*",)):
+    try:
+        # quick dump for debugging
+        try:
+            import os
+            listing = []
+            if os.path.isdir("/dev/input"):
+                for name in sorted(os.listdir("/dev/input")):
+                    try:
+                        st = os.stat(f"/dev/input/{name}")
+                        listing.append(f"{name} mode={oct(st.st_mode & 0o777)} uid={st.st_uid} gid={st.st_gid}")
+                    except Exception as e:
+                        listing.append(f"{name} stat_err={e}")
+            _log("INFO", "EVDEV: /dev/input -> " + (" | ".join(listing) if listing else "empty"))
+        except Exception:
+            pass
+
+        # also dump kernel view
+        try:
+            with open("/proc/bus/input/devices", "r", encoding="utf-8") as f:
+                txt = f.read()
+            _log("INFO", "EVDEV: /proc/bus/input/devices:\n" + txt)
+        except Exception as e:
+            _log("WARN", f"EVDEV: cannot read /proc/bus/input/devices: {e}")
+    except Exception:
+        pass
+
     for p in glob.glob("/dev/input/" + patterns[0]):
         try:
             dev = InputDevice(p)
             name = (dev.name or "").lower()
-            # Rapoo gibi isimlerde de eşleşme yapıyoruz
+            _log("INFO", f"EVDEV: candidate {p} name='{dev.name}'")
             if any(k in name for k in ("keyboard", "keypad", "rapoo", "usb")):
                 return dev.path
-        except Exception:
-            pass
+        except Exception as e:
+            _log("WARN", f"EVDEV: open failed {p}: {e}")
+            continue
     return None
 
 
