@@ -1,6 +1,6 @@
 name: WMPS3
 slug: wmps3
-version: "0.3.15"
+version: "0.3.16"
 description: Cashless laundry payment system (WMPS) — simulate & per-machine toggles with ADAM-6050 and HA-keypad support
 url: https://example.com/wmps3
 arch:
@@ -9,14 +9,13 @@ arch:
   - armhf
   - armv7
   - i386
-
 startup: services
 init: false
 homeassistant_api: true
 
 # Security / permissions
-full_access: true        # test için pratik; çalıştıktan sonra istersen kaldır
-privileged: true         # << önemli: liste yerine boolean true
+full_access: true       
+privileged: true        
 apparmor: false
 
 # Ingress
@@ -39,16 +38,13 @@ options:
   ha_url: "http://supervisor/core"
   ha_ws_url: "ws://supervisor/core/websocket"
   ha_token: ""
-
-  keypad_source: "evdev"   # gerçek USB keypad
+  keypad_source: "evdev"
   ha_event_type: "keyboard_remote_command_received"
   confirm_keys:
     - 28
     - 96
-
   tts_service: "tts.speak"
   media_player: "media_player.vlc_telnet"
-
   adam_host: "192.168.1.101"
   adam_port: 502
   adam_unit_id: 1
@@ -56,26 +52,21 @@ options:
   pulse_seconds: 0.8
   invert_di: false
   activation_confirm_timeout_s: 15
-
   simulate: false
-
   washing_minutes: 30
   dryer_minutes: 60
   price_washing: 5.0
   price_dryer: 5.0
-
   security:
     code_entry_timeout_s: 30
     max_failed_attempts: 5
     lockout_seconds: 120
-
   machine_1_enabled: true
   machine_2_enabled: true
   machine_3_enabled: true
   machine_4_enabled: true
   machine_5_enabled: true
   machine_6_enabled: true
-
   machines:
     - id: 1
       enabled: true
@@ -142,42 +133,33 @@ schema:
   ha_url: str
   ha_ws_url: str?
   ha_token: password?
-
   keypad_source: list(ha|evdev|auto)?
   ha_event_type: str?
   confirm_keys: list(int)?
-
   tts_service: str?
   media_player: str?
-
   adam_host: str?
   adam_port: int?
   adam_unit_id: int?
   do_mode: list(pulse|hold)?
   pulse_seconds: float?
   invert_di: bool?
-
   simulate: bool
-
   washing_minutes: int
   dryer_minutes: int
   price_washing: float
   price_dryer: float
-
   activation_confirm_timeout_s: int
-
   security:
     code_entry_timeout_s: int
     max_failed_attempts: int
     lockout_seconds: int
-
   machine_1_enabled: bool
   machine_2_enabled: bool
   machine_3_enabled: bool
   machine_4_enabled: bool
   machine_5_enabled: bool
   machine_6_enabled: bool
-
   machines:
     - id: int
       enabled: bool
