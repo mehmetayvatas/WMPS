@@ -1,203 +1,100 @@
-name: WMPS3
-slug: wmps3
-version: "0.3.0"
-description: Cashless laundry payment system (WMPS) — simulate & per-machine toggles with ADAM-6050 and HA-keypad support
-url: https://example.com/wmps3
-arch:
-  - aarch64
-  - amd64
-  - armhf
-  - armv7
-  - i386
+ha_url: http://192.168.1.72:8123
+ha_ws_url: ws://192.168.1.72:8123/api/websocket
+ha_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI2ZDg3YWY2MTZkOGQ0ZDM1OTZiM2NlZGJmYzNlZDk4YyIsImlhdCI6MTc1NzIzNDc1NSwiZXhwIjoyMDcyNTk0NzU1fQ.qygl9SkMZ-RY4bFIzQvIsxWIoVmhBCULMEcYz1jWvVQ"
 
-startup: services
-init: false
+keypad_source: ha
+ha_event_type: keyboard_remote_command_received
+confirm_keys:
+  - 28
+  - 96
 
-# Ingress: expose UI/API inside Home Assistant without editing HA config files
-ingress: true
-ingress_port: 8000
-ingress_stream: true
+tts_service: tts.google_translate_speak
+media_player: media_player.vlc_telnet
 
-# Persistent/shared storage
-map:
-  - share:rw
-  - config:rw   # (opsiyonel) log/ayarları dışarı almak istersen
+adam_host: 192.168.1.101
+adam_port: 502
+adam_unit_id: 1
+do_mode: pulse
+pulse_seconds: 0.8
+invert_di: false
+activation_confirm_timeout_s: 15
 
-# USB keypad access from the add-on container (for evdev mode)
-devices:
-  - /dev/input:/dev/input:rwm
-  - /dev/bus/usb:/dev/bus/usb:rwm
-udev: true
+simulate: false
+washing_minutes: 30
+dryer_minutes: 60
+price_washing: 5.0
+price_dryer: 5.0
 
-# Optional: open a direct TCP port (not needed when using Ingress)
-# ports:
-#   8000/tcp: 8000
+security:
+  code_entry_timeout_s: 30
+  max_failed_attempts: 5
+  lockout_seconds: 120
 
-options:
-  # Home Assistant API access (supervisor/core idealdir; dış IP de olabilir)
-  ha_url: "http://supervisor/core"
-  ha_ws_url: "ws://supervisor/core/api/websocket"
-  ha_token: ""
+machine_1_enabled: true
+machine_2_enabled: true
+machine_3_enabled: true
+machine_4_enabled: true
+machine_5_enabled: true
+machine_6_enabled: true
 
-  # Keypad input source:
-  # - ha   : HA event bus üzerinden (keyboard_remote_command_received)
-  # - evdev: /dev/input üzerinden doğrudan (derleme/izin gerekir)
-  # - auto : evdev dener, olmazsa HA'ya düşer
-  keypad_source: "ha"
-  ha_event_type: "keyboard_remote_command_received"
-  confirm_keys:
-    - 28    # Enter
-    - 96    # KP_Enter
-
-  # TTS (optional)
-  tts_service: "tts.speak"
-  media_player: ""
-
-  # ADAM 6050 (donanımı doğrudan sürmek için)
-  adam_host: "192.168.1.101"
-  adam_port: 502
-  adam_unit_id: 1
-  do_mode: "pulse"          # "pulse" | "hold"
-  pulse_seconds: 0.8
-  invert_di: false          # DI aktif-low ise true yap
-  activation_confirm_timeout_s: 15
-
-  # Simülasyon (HA/ADAM'a dokunmadan akışı test et)
-  simulate: false
-
-  # Defaults by machine category
-  washing_minutes: 30
-  dryer_minutes: 60
-  price_washing: 5.0
-  price_dryer: 5.0
-
-  # Keypad security/lock settings
-  security:
-    code_entry_timeout_s: 30
-    max_failed_attempts: 5
-    lockout_seconds: 120
-
-  # Top-level enable/disable flags
-  machine_1_enabled: true
-  machine_2_enabled: true
-  machine_3_enabled: true
-  machine_4_enabled: true
-  machine_5_enabled: true
-  machine_6_enabled: true
-
-  # Machine mapping
-  # - HA yolunu kullanacaksan ha_switch/ha_sensor doldur.
-  # - ADAM yolunu kullanacaksan relay/di adreslerini doldur (ör: 1→DO0/DI0 ... 6→DO5/DI5).
-  machines:
-    - id: 1
-      enabled: true
-      label: "Washing Machine 1"
-      cycle_minutes: 30
-      price: 5.0
-      ha_switch: switch.washer_1_control
-      ha_sensor: binary_sensor.washer_1_status
-      relay: 0
-      di: 0
-      do_mode: "pulse"
-    - id: 2
-      enabled: true
-      label: "Washing Machine 2"
-      cycle_minutes: 30
-      price: 5.0
-      ha_switch: switch.washer_2_control
-      ha_sensor: binary_sensor.washer_2_status
-      relay: 1
-      di: 1
-      do_mode: "pulse"
-    - id: 3
-      enabled: true
-      label: "Washing Machine 3"
-      cycle_minutes: 30
-      price: 5.0
-      ha_switch: switch.washer_3_control
-      ha_sensor: binary_sensor.washer_3_status
-      relay: 2
-      di: 2
-      do_mode: "pulse"
-    - id: 4
-      enabled: true
-      label: "Dryer 1"
-      cycle_minutes: 60
-      price: 5.0
-      ha_switch: switch.dryer_4_control
-      ha_sensor: binary_sensor.dryer_4_status
-      relay: 3
-      di: 3
-      do_mode: "pulse"
-    - id: 5
-      enabled: true
-      label: "Dryer 2"
-      cycle_minutes: 60
-      price: 5.0
-      ha_switch: switch.dryer_5_control
-      ha_sensor: binary_sensor.dryer_5_status
-      relay: 4
-      di: 4
-      do_mode: "pulse"
-    - id: 6
-      enabled: true
-      label: "Dryer 3"
-      cycle_minutes: 60
-      price: 5.0
-      ha_switch: switch.dryer_6_control
-      ha_sensor: binary_sensor.dryer_6_status
-      relay: 5
-      di: 5
-      do_mode: "pulse"
-
-schema:
-  ha_url: str
-  ha_ws_url: str?
-  ha_token: password
-
-  keypad_source: list(ha|evdev|auto)?
-  ha_event_type: str?
-  confirm_keys: list(int)?
-
-  tts_service: str?
-  media_player: str?
-
-  adam_host: str?
-  adam_port: int?
-  adam_unit_id: int?
-  do_mode: list(pulse|hold)?
-  pulse_seconds: float?
-  invert_di: bool?
-
-  simulate: bool
-
-  washing_minutes: int
-  dryer_minutes: int
-  price_washing: float
-  price_dryer: float
-
-  activation_confirm_timeout_s: int
-
-  security:
-    code_entry_timeout_s: int
-    max_failed_attempts: int
-    lockout_seconds: int
-
-  machine_1_enabled: bool
-  machine_2_enabled: bool
-  machine_3_enabled: bool
-  machine_4_enabled: bool
-  machine_5_enabled: bool
-  machine_6_enabled: bool
-
-  machines:
-    - id: int
-      enabled: bool
-      label: str?
-      cycle_minutes: int?
-      price: float?
-      ha_switch: str?
-      ha_sensor: str?
-      relay: int?
-      di: int?
-      do_mode: list(pulse|hold)?
+machines:
+  - id: 1
+    enabled: true
+    label: "Washing Machine 1"
+    cycle_minutes: 30
+    price: 5.0
+    ha_switch: switch.washer_1_control
+    ha_sensor: binary_sensor.washer_1_status
+    relay: 0
+    di: 0
+    do_mode: pulse
+  - id: 2
+    enabled: true
+    label: "Washing Machine 2"
+    cycle_minutes: 30
+    price: 5.0
+    ha_switch: switch.washer_2_control
+    ha_sensor: binary_sensor.washer_2_status
+    relay: 1
+    di: 1
+    do_mode: pulse
+  - id: 3
+    enabled: true
+    label: "Washing Machine 3"
+    cycle_minutes: 30
+    price: 5.0
+    ha_switch: switch.washer_3_control
+    ha_sensor: binary_sensor.washer_3_status
+    relay: 2
+    di: 2
+    do_mode: pulse
+  - id: 4
+    enabled: true
+    label: "Dryer 1"
+    cycle_minutes: 60
+    price: 5.0
+    ha_switch: switch.dryer_4_control
+    ha_sensor: binary_sensor.dryer_4_status
+    relay: 3
+    di: 3
+    do_mode: pulse
+  - id: 5
+    enabled: true
+    label: "Dryer 2"
+    cycle_minutes: 60
+    price: 5.0
+    ha_switch: switch.dryer_5_control
+    ha_sensor: binary_sensor.dryer_5_status
+    relay: 4
+    di: 4
+    do_mode: pulse
+  - id: 6
+    enabled: true
+    label: "Dryer 3"
+    cycle_minutes: 60
+    price: 5.0
+    ha_switch: switch.dryer_6_control
+    ha_sensor: binary_sensor.dryer_6_status
+    relay: 5
+    di: 5
+    do_mode: pulse
