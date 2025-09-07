@@ -65,6 +65,14 @@ ADAM_COIL_BASE = 16
 app = FastAPI(title="WMPS API", version="3.2.0")
 
 # ----------------------- Logging -------------------------
+
+def _resolve_token(candidate: Optional[str]) -> str:
+    """Prefer explicit token; fallback to Supervisor env tokens."""
+    return (candidate or "").strip() or os.getenv("SUPERVISOR_TOKEN", "").strip() or os.getenv("HASSIO_TOKEN", "").strip()
+
+
+
+
 # Prefer centralized logger if available
 def _get_logger():
     try:
@@ -373,7 +381,7 @@ def speak(text: str):
     else:
         domain, service = "tts", tts_service_raw
     media_player = opts.get("media_player") or ""
-    token = opts.get("ha_token") or ""
+    token = _resolve_token(opts.get("ha_token"))
     url = opts.get("ha_url") or "http://supervisor/core"
     if not token or not media_player:
         return
@@ -388,7 +396,7 @@ def speak(text: str):
 
 # ----------------------- HA State/Availability -----------
 def _get_state(entity_id: str, opts: dict) -> str:
-    token = opts.get("ha_token") or ""
+    token = _resolve_token(opts.get("ha_token"))
     url = opts.get("ha_url") or "http://supervisor/core"
     if not token:
         return "simulated" if bool(opts.get("simulate", False)) else "unknown"
@@ -533,7 +541,7 @@ def operate_machine(mid: str, minutes: Optional[int]) -> bool:
     opts = _read_options()
     simulate = bool(opts.get("simulate", False))
     url = opts.get("ha_url") or "http://supervisor/core"
-    token = opts.get("ha_token") or ""
+    token = _resolve_token(opts.get("ha_token"))
     switch, sensor = _machine_entities(mid, opts)
     r, di = _machine_adam_mapping(mid, opts)
 
@@ -933,7 +941,7 @@ def _ha_ws_thread():
         _log("WARN", "websocket-client not available; keypad_source=ha cannot start")
         return
     opts = _read_options()
-    token = opts.get("ha_token") or ""
+    token = _resolve_token(opts.get("ha_token"))
     if not token:
         _log("WARN", "HA WS: missing ha_token")
         return
@@ -1447,17 +1455,21 @@ refresh(); loadConfig();
 @app.get("/machines")
 def machines():
     opts = _read_options()
-    wm = [str(x) for x in (opts.get("washing_machines") or [1,2,3])]
-    dm = [str(x) for x in (opts.get("dryer_machines") or [4,5,6])]
+    wm = [str(x) for x in (opts.get("washing_machines") or [1, 2, 3])]
+    dm = [str(x) for x in (opts.get("dryer_machines") or [4, 5, 6])]
     ids = wm + dm
+
+    has_token = bool(_resolve_token(opts.get("ha_token")))  # env-aware token check
     out = []
+
     for mid in sorted(ids, key=lambda s: int(s)):
         switch, sensor = _machine_entities(mid, opts)
         try_price = _price_for(mid, opts)
 
-        # Prefer ADAM DI for state if configured
+        # Prefer ADAM DI if configured
         r, di = _machine_adam_mapping(mid, opts)
         state = "unknown"
+
         if not machine_enabled(mid, opts):
             state = "disabled"
         else:
@@ -1466,11 +1478,16 @@ def machines():
                 if di_state is not None:
                     state = "on" if di_state else "off"
                 else:
-                    state = _get_state(sensor, opts) if opts.get("ha_token") else ("simulated" if opts.get("simulate") else "unknown")
+                    state = _get_state(sensor, opts) if has_token else ("simulated" if opts.get("simulate") else "unknown")
             else:
-                state = _get_state(sensor, opts) if opts.get("ha_token") else ("simulated" if opts.get("simulate") else "unknown")
+                state = _get_state(sensor, opts) if has_token else ("simulated" if opts.get("simulate") else "unknown")
 
-        err = ("disabled" if not machine_enabled(mid, opts) else ("" if (opts.get("simulate") or opts.get("ha_token") or (opts.get("adam_host") or "").strip()) else "no_token"))
+        err = (
+            "disabled"
+            if not machine_enabled(mid, opts)
+            else ("" if (opts.get("simulate") or has_token or (opts.get("adam_host") or "").strip()) else "no_token")
+        )
+
         out.append({
             "id": mid,
             "category": "washing" if mid in wm else "dryer",
@@ -1481,7 +1498,9 @@ def machines():
             "default_minutes": _default_minutes_for(mid, opts),
             "error": err
         })
+
     return {"ok": True, "machines": out, "simulate": bool(opts.get("simulate", False))}
+
 
 # ----------------------- Accounts ------------------------
 @app.post("/accounts/upsert")
