@@ -1,14 +1,14 @@
 {
-  "ha_url": "http://homeassistant.local:8123",
-  "ha_ws_url": "ws://homeassistant.local:8123/api/websocket",
+  "ha_url": "http://192.168.1.72:8123",
+  "ha_ws_url": null,
   "ha_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkMzE2N2NhYjgwMGU0NjhjOWU0MzdjYjkxODgyZjFkNyIsImlhdCI6MTc1NzE4NTEzMywiZXhwIjoyMDcyNTQ1MTMzfQ.UbgazzUsbpCEI7cRenayLyONFuenHNM5VRpBibj5wGo",
 
-  "tts_service": "tts.google_translate_say",
+  "tts_service": "tts.google_translate_speak",
   "media_player": "media_player.vlc_telnet",
 
   "keypad_source": "ha",
   "ha_event_type": "keyboard_remote_command_received",
-  "confirm_keys": [28, 96], 
+  "confirm_keys": [28, 96],
 
   "adam_host": "192.168.1.101",
   "adam_port": 502,
