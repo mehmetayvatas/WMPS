@@ -152,7 +152,7 @@ options:
 schema:
   ha_url: str
   ha_ws_url: str?
-  ha_token: password
+  ha_token: password?
 
   keypad_source: list(ha|evdev|auto)?
   ha_event_type: str?
