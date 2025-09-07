@@ -32,13 +32,13 @@ options:
   # Home Assistant API
   ha_url: "http://192.168.1.72:8123"
   ha_token: ""
-  # TTS: configuration.yaml'daki `service_name: speak` ile uyumlu
+  # TTS: configuration.yaml'daki `service_name: speak` 
   tts_service: "tts.google_translate_speak"
   media_player: "media_player.vlc_telnet"
 
   # Keypad source: "ha" (WebSocket events), "evdev" (USB), or "auto"
   keypad_source: "ha"
-  ha_ws_url: null
+  ha_ws_url: "ws://192.168.1.72:8123/api/websocket"
   ha_event_type: "keyboard_remote_command_received"
 
   # ADAM-6050 (set host to enable direct DO/DI; otherwise HA entities are used)
