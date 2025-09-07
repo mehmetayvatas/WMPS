@@ -1,9 +1,9 @@
 {
-  "ha_url": "http://supervisor/core/api",
+  "ha_url": "http://supervisor/core",
   "ha_ws_url": "ws://supervisor/core/websocket",
   "ha_token": "",
 
-  "tts_service": "tts.google_translate_speak",
+  "tts_service": "tts.speak",
   "media_player": "media_player.vlc_telnet",
 
   "keypad_source": "ha",
