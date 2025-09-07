@@ -131,8 +131,27 @@ def _derive_ws_url_from_http(http_url: Optional[str]) -> Optional[str]:
         return "wss://" + url[len("https://"):] + "/api/websocket"
     if url.startswith("http://"):
         return "ws://" + url[len("http://"):] + "/api/websocket"
-    # fallback: assume already ws(s)
     return url + "/api/websocket"
+
+
+def _resolve_supervisor_token(candidate: Optional[str]) -> str:
+    # Prefer explicit config if provided and non-empty
+    if candidate and candidate.strip():
+        return candidate.strip()
+    # Fallback to Supervisor-provided environment tokens
+    env_token = os.getenv("SUPERVISOR_TOKEN") or os.getenv("HASSIO_TOKEN") or ""
+    return env_token.strip()
+
+
+def _coerce_confirm_keys(val: Any) -> List[int]:
+    # Accept proper list
+    if isinstance(val, list) and all(isinstance(x, int) for x in val):
+        return val
+    # Some schemas can send a sentinel like "int" – coerce to defaults
+    if isinstance(val, str):
+        return [28, 96]
+    # Default
+    return [28, 96]
 
 
 def _apply_machine_toggles(norm: Dict[str, Any]) -> None:
@@ -154,7 +173,6 @@ def _apply_machine_toggles(norm: Dict[str, Any]) -> None:
         machines = []
         norm["machines"] = machines
 
-    # Index by id for updates
     by_id: Dict[int, Dict[str, Any]] = {}
     for m in machines:
         try:
@@ -164,7 +182,6 @@ def _apply_machine_toggles(norm: Dict[str, Any]) -> None:
         if mid:
             by_id[mid] = m  # keep ref
 
-    # Apply; create item if missing with safe defaults (relay/di = id-1)
     for mid, enabled in toggles.items():
         if mid in by_id:
             entry = by_id[mid]
@@ -175,7 +192,6 @@ def _apply_machine_toggles(norm: Dict[str, Any]) -> None:
                 if entry.get("di") is None:
                     entry["di"] = mid - 1
             else:
-                # Unexpected object; replace minimal dict
                 by_id[mid] = {"id": mid, "relay": mid - 1, "di": mid - 1, "enabled": enabled}
         else:
             machines.append({"id": mid, "relay": mid - 1, "di": mid - 1, "enabled": enabled})
@@ -185,18 +201,17 @@ def _normalize_sources(raw: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize raw dict to AppConfig-compatible keys regardless of source style."""
     norm = dict(raw)
 
-    # YAML style 'machines' dict -> machines_yaml
+    # Machines YAML dict -> machines_yaml
     if isinstance(norm.get("machines"), dict):
         norm["machines_yaml"] = norm.get("machines")
         norm["machines"] = None
 
-    # Promote nested YAML blocks (legacy)
+    # Promote legacy nested blocks
     if isinstance(norm.get("adam"), dict):
         a = norm["adam"]
         norm.setdefault("adam_host", a.get("host"))
         norm.setdefault("adam_port", a.get("port"))
         norm.setdefault("adam_unit_id", a.get("unit_id", 1))
-        # Optional ADAM extras
         for k in ("do_mode", "pulse_seconds", "invert_di", "activation_confirm_timeout_s"):
             if a.get(k) is not None:
                 norm.setdefault(k, a.get(k))
@@ -215,20 +230,22 @@ def _normalize_sources(raw: Dict[str, Any]) -> Dict[str, Any]:
         if h.get("confirm_keys") is not None:
             norm.setdefault("confirm_keys", h.get("confirm_keys"))
 
-    # Derive ha_ws_url if missing but ha_url exists
+    # Default to Supervisor endpoints if missing
+    norm.setdefault("ha_url", "http://supervisor/core/api")
     if not norm.get("ha_ws_url") and norm.get("ha_url"):
         norm["ha_ws_url"] = _derive_ws_url_from_http(norm.get("ha_url"))
 
-    # Default keypad fields if still missing
+    # Token resolution: empty/None -> Supervisor/Hassio token from env
+    norm["ha_token"] = _resolve_supervisor_token(norm.get("ha_token"))
+
+    # Keypad defaults and coercion
     norm.setdefault("keypad_source", "ha")
     norm.setdefault("ha_event_type", "keyboard_remote_command_received")
-    norm.setdefault("confirm_keys", [28, 96])  # Enter & KP_Enter
+    norm["confirm_keys"] = _coerce_confirm_keys(norm.get("confirm_keys"))
 
-    # Merge top-level machine toggles into machines list
+    # Merge top-level machine toggles
     _apply_machine_toggles(norm)
 
-    # Backward compat: if per-category minutes/prices yoksa tekil price_per_cycle'ı kullanma
-    # (Uygulama tarafı bu alanları kontrol etmeli)
     return norm
 
 
