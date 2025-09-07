@@ -1,6 +1,9 @@
 from __future__ import annotations
 from typing import Optional, Dict, Any, Tuple
+import os
 import httpx
+
+from app.utils import logger
 
 
 class HAClient:
@@ -9,13 +12,14 @@ class HAClient:
 
     Features:
     - Generic service call: call_service(domain, service, data)
-    - TTS helper: speak(...), works with both 'tts.speak' (new) and 'tts.*_say' (legacy)
-    - Ideal for VLC Telnet: tts_service='tts.google_translate_say', media_player='media_player.vlc_telnet'
+    - TTS helper: speak(...), supports both 'tts.speak' (new) and 'tts.*_say' (legacy)
+    - Convenience helpers: turn_on/turn_off for switches
     """
 
-    def __init__(self, base_url: str, token: str, *, timeout: float = 5.0):
+    def __init__(self, base_url: str, token: Optional[str], *, timeout: float = 5.0):
         self.base_url = (base_url or "").rstrip("/")
-        self.token = token or ""
+        # Resolve token: prefer explicit, fallback to Supervisor env tokens
+        self.token = (token or "").strip() or os.getenv("SUPERVISOR_TOKEN", "").strip() or os.getenv("HASSIO_TOKEN", "").strip()
         self.timeout = float(timeout)
 
     # ----------------- internal helpers -----------------
@@ -37,9 +41,10 @@ class HAClient:
         default_service: str = "speak",
     ) -> Tuple[str, str]:
         """
-        'tts.google_translate_say'  → ('tts','google_translate_say')
-        'speak'                      → ('tts','speak')
-        None                         → ('tts','speak')
+        Examples:
+        'tts.google_translate_say' → ('tts','google_translate_say')
+        'speak'                    → ('tts','speak')
+        None                       → ('tts','speak')
         """
         if tts_service:
             if "." in tts_service:
@@ -53,18 +58,26 @@ class HAClient:
         """
         Call any Home Assistant service; returns JSON or empty dict.
         Returns None if base_url/token are missing.
-        Raises for HTTP errors.
+        Logs warnings on HTTP errors instead of raising.
         """
         if not (self.base_url and self.token):
+            logger.warning("[HAClient] Missing base_url or token, cannot call service %s.%s", domain, service)
             return None
         url = self._svc_url(domain, service)
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            r = await client.post(url, headers=self._headers(), json=data)
-            r.raise_for_status()
-            try:
-                return r.json()
-            except Exception:
-                return {}
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                r = await client.post(url, headers=self._headers(), json=data)
+                r.raise_for_status()
+                try:
+                    return r.json()
+                except Exception:
+                    return {}
+        except httpx.HTTPStatusError as e:
+            logger.warning("[HAClient] HTTP error %s for %s.%s: %s", e.response.status_code, domain, service, e)
+            return None
+        except Exception as e:
+            logger.warning("[HAClient] Failed to call service %s.%s: %s", domain, service, e)
+            return None
 
     # ----------------- public: TTS helper -----------------
     async def speak(
