@@ -703,7 +703,7 @@ def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minut
                 # rollback attempt (best-effort)
                 try:
                     url = opts.get("ha_url") or "http://supervisor/core"
-                    token = opts.get("ha_token") or ""
+                    token = _resolve_token(opts.get("ha_token"))
                     switch, _sensor = _machine_entities(machine, opts)
                     if token:
                         _ha_call_service(url, token, "switch", "turn_off", {"entity_id": switch})
@@ -716,7 +716,7 @@ def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minut
                 speak("Insufficient balance.")
                 try:
                     url = opts.get("ha_url") or "http://supervisor/core"
-                    token = opts.get("ha_token") or ""
+                    token = _resolve_token(opts.get("ha_token"))
                     switch, _sensor = _machine_entities(machine, opts)
                     if token:
                         _ha_call_service(url, token, "switch", "turn_off", {"entity_id": switch})
