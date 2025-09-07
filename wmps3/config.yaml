@@ -15,11 +15,9 @@ init: false
 homeassistant_api: true
 
 # Security / permissions
-full_access: true        # evdev için en sorunsuz yol (testte önerilir)
-apparmor: false          # tek yerde dursun
-privileged:
-  - SYS_ADMIN
-  - SYS_RAWIO
+full_access: true        # test için pratik; çalıştıktan sonra istersen kaldır
+privileged: true         # << önemli: liste yerine boolean true
+apparmor: false
 
 # Ingress
 ingress: true
@@ -31,7 +29,7 @@ map:
   - share:rw
   - config:rw
 
-# USB/evdev erişimi (full_access:true olsa da bırakmak sorun değil)
+# USB/evdev erişimi
 devices:
   - /dev/input:/dev/input:rwm
   - /dev/bus/usb:/dev/bus/usb:rwm
