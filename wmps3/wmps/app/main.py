@@ -1032,6 +1032,19 @@ def on_start():
 def ping():
     return {"ok": True, "ts": datetime.now(timezone.utc).isoformat()}
 
+@app.get("/debug/tts")
+def debug_tts(msg: str = "Hello from WMPS"):
+    """
+    Quick TTS test endpoint.
+    Example: /debug/tts?msg=Merhaba+Memo
+    """
+    try:
+        speak(msg)
+        return {"ok": True, "message": msg}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @app.get("/", response_class=HTMLResponse)
 def root_ui():
     return HTMLResponse("""
