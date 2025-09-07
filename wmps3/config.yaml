@@ -1,6 +1,6 @@
 name: WMPS3
 slug: wmps3
-version: "0.3.3"
+version: "0.3.4"
 description: Cashless laundry payment system (WMPS) — simulate & per-machine toggles with ADAM-6050 and HA-keypad support
 url: https://example.com/wmps3
 arch:
@@ -12,6 +12,7 @@ arch:
 
 startup: services
 init: false
+homeassistant_api: true  
 
 # Ingress: expose UI/API inside Home Assistant without editing HA config files
 ingress: true
@@ -21,7 +22,7 @@ ingress_stream: true
 # Persistent/shared storage
 map:
   - share:rw
-  - config:rw   # (opsiyonel) log/ayarları dışarı almak istersen
+  - config:rw
 
 # USB keypad access from the add-on container (for evdev mode)
 devices:
@@ -29,56 +30,40 @@ devices:
   - /dev/bus/usb:/dev/bus/usb:rwm
 udev: true
 
-# Optional: open a direct TCP port (not needed when using Ingress)
-# ports:
-#   8000/tcp: 8000
-
-# Varsayılanlar (UI'de Options değiştirilebilir)
 options:
-  # Home Assistant API access (IP önerilir)
-  ha_url: "http://192.168.1.72:8123"
-  ha_ws_url: null
-  ha_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI2ZDg3YWY2MTZkOGQ0ZDM1OTZiM2NlZGJmYzNlZDk4YyIsImlhdCI6MTc1NzIzNDc1NSwiZXhwIjoyMDcyNTk0NzU1fQ.qygl9SkMZ-RY4bFIzQvIsxWIoVmhBCULMEcYz1jWvVQ"
+  ha_url: "http://supervisor/core/api"
+  ha_ws_url: "ws://supervisor/core/websocket"
+  ha_token: ""   # 👈 boş string, Supervisor token fallback için
 
-  # Keypad input source:
-  # - ha   : HA event bus (keyboard_remote_command_received)
-  # - evdev: /dev/input üzerinden doğrudan
-  # - auto : evdev dener, olmazsa HA'ya düşer
   keypad_source: "evdev"
   ha_event_type: "keyboard_remote_command_received"
   confirm_keys:
-    - 28    # Enter
-    - 96    # KP_Enter
+    - 28
+    - 96
 
-  # TTS
   tts_service: "tts.google_translate_speak"
   media_player: "media_player.vlc_telnet"
 
-  # ADAM 6050 (donanımı doğrudan sürmek için)
   adam_host: "192.168.1.101"
   adam_port: 502
   adam_unit_id: 1
-  do_mode: "pulse"          # "pulse" | "hold"
+  do_mode: "pulse"
   pulse_seconds: 0.8
   invert_di: false
   activation_confirm_timeout_s: 15
 
-  # Simülasyon (HA/ADAM'a dokunmadan akışı test et)
   simulate: false
 
-  # Defaults by machine category
   washing_minutes: 30
   dryer_minutes: 60
   price_washing: 5.0
   price_dryer: 5.0
 
-  # Keypad security/lock settings
   security:
     code_entry_timeout_s: 30
     max_failed_attempts: 5
     lockout_seconds: 120
 
-  # Top-level enable/disable flags
   machine_1_enabled: true
   machine_2_enabled: true
   machine_3_enabled: true
@@ -86,7 +71,6 @@ options:
   machine_5_enabled: true
   machine_6_enabled: true
 
-  # Machine mapping
   machines:
     - id: 1
       enabled: true
@@ -97,7 +81,7 @@ options:
       ha_sensor: binary_sensor.washer_1_status
       relay: 0
       di: 0
-      do_mode: "pulse"
+      do_mode: pulse
     - id: 2
       enabled: true
       label: "Washing Machine 2"
@@ -107,7 +91,7 @@ options:
       ha_sensor: binary_sensor.washer_2_status
       relay: 1
       di: 1
-      do_mode: "pulse"
+      do_mode: pulse
     - id: 3
       enabled: true
       label: "Washing Machine 3"
@@ -117,7 +101,7 @@ options:
       ha_sensor: binary_sensor.washer_3_status
       relay: 2
       di: 2
-      do_mode: "pulse"
+      do_mode: pulse
     - id: 4
       enabled: true
       label: "Dryer 1"
@@ -127,7 +111,7 @@ options:
       ha_sensor: binary_sensor.dryer_4_status
       relay: 3
       di: 3
-      do_mode: "pulse"
+      do_mode: pulse
     - id: 5
       enabled: true
       label: "Dryer 2"
@@ -137,7 +121,7 @@ options:
       ha_sensor: binary_sensor.dryer_5_status
       relay: 4
       di: 4
-      do_mode: "pulse"
+      do_mode: pulse
     - id: 6
       enabled: true
       label: "Dryer 3"
@@ -147,12 +131,12 @@ options:
       ha_sensor: binary_sensor.dryer_6_status
       relay: 5
       di: 5
-      do_mode: "pulse"
+      do_mode: pulse
 
 schema:
   ha_url: str
   ha_ws_url: str?
-  ha_token: password?
+  ha_token: password? 
 
   keypad_source: list(ha|evdev|auto)?
   ha_event_type: str?
