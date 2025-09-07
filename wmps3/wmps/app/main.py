@@ -845,7 +845,7 @@ _MAIN_ROW_NUM = {2: "1", 3: "2", 4: "3", 5: "4", 6: "5", 7: "6", 8: "7", 9: "8",
 _KP_NUM = {79: "1", 80: "2", 81: "3", 75: "4", 76: "5", 77: "6", 71: "7", 72: "8", 73: "9", 82: "0"}  # KP1..KP0
 
 def _map_keycode_name(name: str) -> Optional[str]:
-    # Convert raw key names to symbols used by KeypadStateMachine
+    
     if not name:
         return None
     k = name
@@ -853,7 +853,8 @@ def _map_keycode_name(name: str) -> Optional[str]:
         k = k[4:]
     if k in ("ENTER", "KPENTER"):
         return "ENTER"
-    if k in ("KPASTERISK", "ESC", "BACKSPACE"):
+    
+    if k in ("KPASTERISK", "ESC", "BACKSPACE", "DELETE", "DEL", "TAB", "INS"):
         return "CANCEL"
     if k in ("HASHTAG",):
         return "ENTER"
@@ -872,7 +873,8 @@ def _map_keycode_int(code: int) -> Optional[str]:
         return _KP_NUM[code]
     if code in (28, 96):  # Enter, KP_Enter
         return "ENTER"
-    if code in (1, 14, 111):  # Esc, Backspace, Delete -> cancel
+    
+    if code in (1, 14, 111, 15):  # Esc, Backspace, Delete, Tab -> cancel
         return "CANCEL"
     if code in (43,):  # '#' fallback -> ENTER
         return "ENTER"
