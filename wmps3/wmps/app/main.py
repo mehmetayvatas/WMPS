@@ -908,7 +908,9 @@ def _find_keypad_device(patterns=("event*",)):
     for p in glob.glob("/dev/input/" + patterns[0]):
         try:
             dev = InputDevice(p)
-            if "Keyboard" in (dev.name or "") or "Keypad" in (dev.name or ""):
+            name = (dev.name or "").lower()
+            # Rapoo gibi isimlerde de eşleşme yapıyoruz
+            if any(k in name for k in ("keyboard", "keypad", "rapoo", "usb")):
                 return dev.path
         except Exception:
             pass
