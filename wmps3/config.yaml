@@ -37,7 +37,7 @@ devices:
 udev: true
 
 options:
-  ha_url: "http://supervisor/core"
+  ha_url: "http://supervisor/core/api"
   ha_ws_url: "ws://supervisor/core/websocket"
   ha_token: ""
 
