@@ -980,7 +980,7 @@ def _evdev_thread():
 
         try:
             for event in dev.read_loop():
-                # EV_KEY only; value 1 == key down
+                # EV_KEY only; value 1 == key down (press). İstersen tekrarları da görmek için (1,2) yapabilirsin.
                 if event.type != ecodes.EV_KEY or getattr(event, "value", None) != 1:
                     continue
 
@@ -1015,10 +1015,16 @@ def _evdev_thread():
                 # Debug trace
                 _log("DEBUG", f"evdev keydown code={event.code} name={name or '-'} -> {sym or '-'}")
 
+                # Human-friendly press log (always log something)
+                if sym:
+                    human = {"ENTER": "Enter", "CANCEL": "Cancel"}.get(sym, sym)
+                    _log("INFO", f"Pressed key {human} (evdev)")
+                else:
+                    raw = name or f"code={event.code}"
+                    _log("INFO", f"Pressed key {raw} (evdev) [unmapped]")
+
                 # Dispatch to state machine
                 if sym:
-                    human = {"ENTER":"Enter","CANCEL":"Cancel"}.get(sym, sym)
-+                   _log("INFO", f"Pressed key {human} (ws)")
                     sm.on_sym(sym)
 
         except OSError as e:
@@ -1038,6 +1044,7 @@ def _evdev_thread():
                 pass
             time.sleep(2.0)
             continue
+
 
 
 def _find_keypad_device(patterns=("event*",)):
