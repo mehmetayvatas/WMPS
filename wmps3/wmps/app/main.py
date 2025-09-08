@@ -377,58 +377,41 @@ def tail_transactions(n: int = 50) -> List[Dict[str,str]]:
 
 # ----------------------- TTS -----------------------------
 def speak(text: str):
-    """TTS helper: prefer tts.speak (new API), fall back to legacy tts.*_say."""
+    """Use HA tts.speak with the new schema; fall back to legacy service if needed."""
     if not text:
         return
-    try:
-        opts = _read_options()
-        url = (opts.get("ha_url") or "http://supervisor/core").rstrip("/")
-        token = _resolve_token(opts.get("ha_token"))
-        media_player = (opts.get("media_player") or "").strip()
-        tts_entity = (opts.get("tts_entity_id") or "tts.google_translate").strip()
-        language = (opts.get("tts_language") or "").strip() or None
-
-        if not token or not media_player:
-            return
-
-        # ---- 1) Modern API: tts.speak ----
-        # NOTE: 'language' artık 'options' içine verilmeli.
-        new_payload = {
-            "entity_id": tts_entity,
-            "media_player_entity_id": media_player,
-            "message": text,
-            "cache": False,
-        }
-        if language:
-            new_payload["options"] = {"language": language}
-
-        _log("INFO", f"TTS speak(new) -> tts={tts_entity} mp={media_player}")
-        _ha_call_service(url, token, "tts", "speak", new_payload)
+    opts = _read_options()
+    url = opts.get("ha_url") or "http://supervisor/core"
+    token = _resolve_token(opts.get("ha_token"))
+    media_player = (opts.get("media_player") or "").strip()
+    language = (opts.get("tts_language") or "").strip() or None
+    if not token or not media_player:
         return
 
-    except Exception as e_new:
-        _log("WARN", f"tts.speak(new) failed: {e_new}")
+    # New schema (HA 2024+): entity_id is the MEDIA PLAYER.
+    try:
+        payload = {"entity_id": media_player, "message": text, "cache": False}
+        if language:
+            payload["language"] = language
+        _ha_call_service(url, token, "tts", "speak", payload)
+        _log("INFO", f"TTS speak OK -> {media_player}")
+        return
+    except Exception as e:
+        _log("WARN", f"tts.speak failed: {e}")
 
-    # ---- 2) Legacy: tts.google_translate_say (veya verilen servis) ----
+    # Fallback to explicit service (e.g. google_translate_say)
     try:
         raw = (opts.get("tts_service") or "google_translate_say").strip()
-        # 'tts.' ile gelirse servis adını ayıkla
         if raw.startswith("tts."):
             raw = raw.split(".", 1)[1]
-
-        legacy_payload = {
-            "entity_id": media_player,
-            "message": text,
-            "cache": False,
-        }
-        # Legacy google_translate_say hâlâ 'language' kabul ediyor
+        payload = {"entity_id": media_player, "message": text}
         if language:
-            legacy_payload["language"] = language
+            payload["language"] = language
+        _ha_call_service(url, token, "tts", raw, payload)
+        _log("INFO", f"TTS fallback tts.{raw} OK")
+    except Exception as e:
+        _log("WARN", f"TTS fallback failed: {e}")
 
-        _log("INFO", f"TTS speak(legacy) -> service=tts.{raw} mp={media_player}")
-        _ha_call_service(url, token, "tts", raw, legacy_payload)
-    except Exception as e_legacy:
-        _log("WARN", f"TTS legacy failed: {e_legacy}")
 
 
 
