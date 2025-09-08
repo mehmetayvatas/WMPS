@@ -1,6 +1,6 @@
 name: WMPS3
 slug: wmps3
-version: "0.3.21"
+version: "0.3.22"
 description: Cashless laundry payment system (WMPS) — simulate & per-machine toggles with ADAM-6050 and HA-keypad support
 url: https://example.com/wmps3
 arch: [aarch64, amd64, armhf, armv7, i386]
@@ -30,7 +30,7 @@ devices:
 udev: true
 
 options:
-  ha_url: "http://supervisor/core/api"
+  ha_url: "http://supervisor/core"
   ha_ws_url: "ws://supervisor/core/websocket"
   ha_token: ""
 
