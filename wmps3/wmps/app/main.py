@@ -377,64 +377,44 @@ def tail_transactions(n: int = 50) -> List[Dict[str,str]]:
 
 # ----------------------- TTS -----------------------------
 def speak(text: str):
-    """Robust TTS helper: try tts.speak with minimal payload, retry on 400, then fallback to legacy."""
+    """Use tts.speak primarily; optionally fall back to a legacy tts.*_say if explicitly configured."""
+    if not text:
+        return
+    opts = _read_options()
+    url = opts.get("ha_url") or "http://supervisor/core"
+    token = _resolve_token(opts.get("ha_token"))
+    media_player = (opts.get("media_player") or "").strip()
+    tts_entity = (opts.get("tts_entity_id") or "").strip()
+
+    if not token:
+        _log("WARN", "TTS skipped: missing HA token")
+        return
+    if not media_player:
+        _log("WARN", "TTS skipped: missing media_player")
+        return
+
+    # Primary: tts.speak
     try:
-        if not text:
+        if tts_entity:
+            _log("INFO", f"TTS speak -> entity={tts_entity} mp={media_player}")
+            _ha_call_service(
+                url, token, "tts", "speak",
+                {"entity_id": tts_entity, "media_player_entity_id": media_player, "message": text, "cache": False}
+            )
             return
-
-        opts = _read_options()
-        url = opts.get("ha_url") or "http://supervisor/core"
-        token = _resolve_token(opts.get("ha_token"))
-        media_player = (opts.get("media_player") or "").strip()
-        tts_entity = (opts.get("tts_entity_id") or "").strip()
-        lang = (opts.get("tts_language") or "").strip()
-
-        if not token or not media_player or not tts_entity:
-            return
-
-        # 1) Modern API (minimal payload first)
-        base_payload = {
-            "entity_id": tts_entity,
-            "media_player_entity_id": media_player,
-            "message": text,
-        }
-        try:
-            _ha_call_service(url, token, "tts", "speak", dict(base_payload))
-            return
-        except urllib.error.HTTPError as he:
-            # Retry without extras if 400; otherwise bubble to fallback
-            if he.code == 400:
-                try:
-                    # Retry adding language only if explicitly set might help some engines
-                    if lang:
-                        retry_payload = dict(base_payload)
-                        retry_payload["language"] = lang
-                        _ha_call_service(url, token, "tts", "speak", retry_payload)
-                        return
-                except Exception:
-                    pass
-            # else: fall through to legacy
-
-        except Exception:
-            # fall through to legacy
-            pass
-
-        # 2) Legacy fallback (e.g., google_translate_say)
-        raw = (opts.get("tts_service") or "google_translate_say").strip()
-        if raw.startswith("tts."):
-            raw = raw.split(".", 1)[1]
-
-        legacy_payload = {
-            "entity_id": media_player,   # legacy expects media_player here
-            "message": text,
-        }
-        if lang:
-            legacy_payload["language"] = lang
-
-        _ha_call_service(url, token, "tts", raw, legacy_payload)
-
     except Exception as e:
-        _log("WARN", f"TTS failed: {e}")
+        _log("WARN", f"tts.speak failed: {e}")
+
+    # Fallback only if explicitly configured
+    raw = (opts.get("tts_service") or "").strip()
+    if raw:
+        try:
+            svc = raw.split(".", 1)[1] if raw.startswith("tts.") else raw
+            _log("INFO", f"TTS legacy -> service=tts.{svc} mp={media_player}")
+            _ha_call_service(url, token, "tts", svc, {"entity_id": media_player, "message": text})
+        except Exception as e:
+            _log("WARN", f"TTS legacy failed: {e}")
+
 
 
 
