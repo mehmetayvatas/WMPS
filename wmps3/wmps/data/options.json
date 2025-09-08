@@ -24,6 +24,9 @@
 
   "simulate": false,
 
+  "washing_machines": [1, 2, 3],
+  "dryer_machines": [4, 5, 6],
+
   "machine_1_enabled": true,
   "machine_2_enabled": true,
   "machine_3_enabled": true,
@@ -38,6 +41,9 @@
       "enabled": true,
       "relay": 0,
       "di": 0,
+      "do_mode": "pulse",
+      "cycle_minutes": 30,
+      "price": 5.0,
       "ha_switch": "switch.washer_1_control",
       "ha_sensor": "binary_sensor.washer_1_status"
     },
@@ -47,6 +53,9 @@
       "enabled": true,
       "relay": 1,
       "di": 1,
+      "do_mode": "pulse",
+      "cycle_minutes": 30,
+      "price": 5.0,
       "ha_switch": "switch.washer_2_control",
       "ha_sensor": "binary_sensor.washer_2_status"
     },
@@ -56,6 +65,9 @@
       "enabled": true,
       "relay": 2,
       "di": 2,
+      "do_mode": "pulse",
+      "cycle_minutes": 30,
+      "price": 5.0,
       "ha_switch": "switch.washer_3_control",
       "ha_sensor": "binary_sensor.washer_3_status"
     },
@@ -65,6 +77,9 @@
       "enabled": true,
       "relay": 3,
       "di": 3,
+      "do_mode": "pulse",
+      "cycle_minutes": 60,
+      "price": 5.0,
       "ha_switch": "switch.dryer_4_control",
       "ha_sensor": "binary_sensor.dryer_4_status"
     },
@@ -74,6 +89,9 @@
       "enabled": true,
       "relay": 4,
       "di": 4,
+      "do_mode": "pulse",
+      "cycle_minutes": 60,
+      "price": 5.0,
       "ha_switch": "switch.dryer_5_control",
       "ha_sensor": "binary_sensor.dryer_5_status"
     },
@@ -83,6 +101,9 @@
       "enabled": true,
       "relay": 5,
       "di": 5,
+      "do_mode": "pulse",
+      "cycle_minutes": 60,
+      "price": 5.0,
       "ha_switch": "switch.dryer_6_control",
       "ha_sensor": "binary_sensor.dryer_6_status"
     }
@@ -101,6 +122,8 @@
     "5": 5.0,
     "6": 5.0
   },
+
+  "disabled_machines": [],
 
   "security": {
     "code_entry_timeout_s": 30,
