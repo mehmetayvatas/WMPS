@@ -3,10 +3,13 @@
   "ha_ws_url": "ws://supervisor/core/websocket",
   "ha_token": "",
 
+  "tts_entity_id": "tts.google_translate_en_com",
+  "tts_language": "en",
   "tts_service": "tts.google_translate_en_com",
   "media_player": "media_player.vlc_telnet",
 
-  "keypad_source": "ha",
+  "keypad_source": "evdev",
+  "keypad_device": "/dev/input/by-id/usb-SIGMACHIP_USB_Keyboard-event-kbd",
   "ha_event_type": "keyboard_remote_command_received",
   "confirm_keys": [28, 96],
 
