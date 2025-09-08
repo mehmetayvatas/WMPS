@@ -1017,6 +1017,8 @@ def _evdev_thread():
 
                 # Dispatch to state machine
                 if sym:
+                    human = {"ENTER":"Enter","CANCEL":"Cancel"}.get(sym, sym)
++                   _log("INFO", f"Pressed key {human} (ws)")
                     sm.on_sym(sym)
 
         except OSError as e:
