@@ -3,25 +3,18 @@ slug: wmps3
 version: "0.3.20"
 description: Cashless laundry payment system (WMPS) — simulate & per-machine toggles with ADAM-6050 and HA-keypad support
 url: https://example.com/wmps3
-arch:
-  - aarch64
-  - amd64
-  - armhf
-  - armv7
-  - i386
+arch: [aarch64, amd64, armhf, armv7, i386]
 
 startup: services
 init: false
 homeassistant_api: true
 
-# >>> İZİNLER
-apparmor: false        # AppArmor kapalı (aksi halde evdev'i engeller)
-full_access: true      # TEST için en kolayı; çalıştıktan sonra kaldırıp privileged listeye geçebilirsin
-# Alternatif (full_access kullanmayacaksan):
+# Permissions
+apparmor: false
+full_access: true         
 # privileged:
 #   - SYS_ADMIN
 #   - SYS_RAWIO
-# <<<
 
 ingress: true
 ingress_port: 8000
@@ -41,13 +34,16 @@ options:
   ha_ws_url: "ws://supervisor/core/websocket"
   ha_token: ""
 
+  # Keypad / TTS
   keypad_source: "evdev"
-  ha_event_type: "keyboard_remote_command_received"
-  confirm_keys: [28, 96]
-
-  tts_service: "tts.google_translate_en_com"
+  keypad_device: "/dev/input/by-id/usb-SIGMACHIP_USB_Keyboard-event-kbd"
+  ha_event_type: "keyboard_remote_command_received"   
+  confirm_keys: [28, 96]                               # Enter (28), Keypad Enter (96)
+  tts_entity_id: "tts.google_translate_en_com"
+  tts_language: "en"
   media_player: "media_player.vlc_telnet"
 
+  # ADAM & run-mode
   adam_host: "192.168.1.101"
   adam_port: 502
   adam_unit_id: 1
@@ -58,16 +54,19 @@ options:
 
   simulate: false
 
+  # Defaults & pricing
   washing_minutes: 30
   dryer_minutes: 60
   price_washing: 5.0
   price_dryer: 5.0
 
+  # Security
   security:
     code_entry_timeout_s: 30
     max_failed_attempts: 5
     lockout_seconds: 120
 
+  # Per-machine enable toggles
   machine_1_enabled: true
   machine_2_enabled: true
   machine_3_enabled: true
@@ -75,6 +74,7 @@ options:
   machine_5_enabled: true
   machine_6_enabled: true
 
+  # Machine map
   machines:
     - id: 1
       enabled: true
@@ -141,33 +141,43 @@ schema:
   ha_url: str
   ha_ws_url: str?
   ha_token: password?
+
   keypad_source: list(ha|evdev|auto)?
+  keypad_device: str?
   ha_event_type: str?
   confirm_keys: list(int)?
-  tts_service: str?
+
+  tts_entity_id: str?
+  tts_language: str?
   media_player: str?
+
   adam_host: str?
   adam_port: int?
   adam_unit_id: int?
   do_mode: list(pulse|hold)?
   pulse_seconds: float?
   invert_di: bool?
+  activation_confirm_timeout_s: int
+
   simulate: bool
+
   washing_minutes: int
   dryer_minutes: int
   price_washing: float
   price_dryer: float
-  activation_confirm_timeout_s: int
+
   security:
     code_entry_timeout_s: int
     max_failed_attempts: int
     lockout_seconds: int
+
   machine_1_enabled: bool
   machine_2_enabled: bool
   machine_3_enabled: bool
   machine_4_enabled: bool
   machine_5_enabled: bool
   machine_6_enabled: bool
+
   machines:
     - id: int
       enabled: bool
