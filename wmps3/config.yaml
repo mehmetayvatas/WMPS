@@ -1,6 +1,6 @@
 name: WMPS3
 slug: wmps3
-version: "0.3.19"
+version: "0.3.20"
 description: Cashless laundry payment system (WMPS) — simulate & per-machine toggles with ADAM-6050 and HA-keypad support
 url: https://example.com/wmps3
 arch:
@@ -45,7 +45,7 @@ options:
   ha_event_type: "keyboard_remote_command_received"
   confirm_keys: [28, 96]
 
-  tts_service: "tts.speak"
+  tts_service: "tts.google_translate_en_com"
   media_player: "media_player.vlc_telnet"
 
   adam_host: "192.168.1.101"
