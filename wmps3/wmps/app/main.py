@@ -14,11 +14,11 @@ import socket
 import ssl
 import traceback
 
+
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional, Union, List, Tuple
-from typing import Dict
 
 # Optional imports (guarded)
 try:
@@ -69,9 +69,11 @@ app = FastAPI(title="WMPS API", version="3.2.0")
 
 # ----------------------- Logging -------------------------
 
-def _resolve_token(candidate: Optional[str]) -> str:
-    """Prefer explicit token; fallback to Supervisor env tokens."""
-    return (candidate or "").strip() or os.getenv("SUPERVISOR_TOKEN", "").strip() or os.getenv("HASSIO_TOKEN", "").strip()
+def _resolve_token(cfg_token: Optional[str]) -> Optional[str]:
+    t = (cfg_token or "").strip()
+    if t:
+        return t
+    return os.environ.get("SUPERVISOR_TOKEN")
 
 
 
@@ -375,27 +377,59 @@ def tail_transactions(n: int = 50) -> List[Dict[str,str]]:
 
 # ----------------------- TTS -----------------------------
 def speak(text: str):
-    """TTS helper compatible with both 'tts.speak' and legacy 'tts.*_say'."""
-    opts = _read_options()
-    if not text: return
-    tts_service_raw = (opts.get("tts_service") or "tts.google_translate_say")
-    if "." in tts_service_raw:
-        domain, service = tts_service_raw.split(".", 1)
-    else:
-        domain, service = "tts", tts_service_raw
-    media_player = opts.get("media_player") or ""
-    token = _resolve_token(opts.get("ha_token"))
-    url = opts.get("ha_url") or "http://supervisor/core"
-    if not token or not media_player:
-        return
+    """TTS helper supporting modern 'tts.speak' and legacy 'tts.*_say'."""
     try:
-        if domain == "tts" and service == "speak":
-            payload = {"media_player_entity_id": media_player, "message": text, "cache": False}
-        else:
-            payload = {"entity_id": media_player, "message": text, "cache": False}
-        _ha_call_service(url, token, domain, service, payload)
+        if not text:
+            return
+
+        opts = _read_options()
+        url = opts.get("ha_url") or "http://supervisor/core"
+        token = _resolve_token(opts.get("ha_token"))
+        media_player = (opts.get("media_player") or "").strip()
+        tts_entity = (opts.get("tts_entity_id") or "tts.google_translate_en_com").strip()
+        language = (opts.get("tts_language") or "en").strip()
+
+        if not token or not media_player:
+            return
+
+        # Try modern API first
+        try:
+            _ha_call_service(
+                url,
+                token,
+                "tts",
+                "speak",
+                {
+                    "entity_id": tts_entity,
+                    "media_player_entity_id": media_player,
+                    "message": text,
+                    "language": language,
+                    "cache": False,
+                },
+            )
+            return
+        except Exception:
+            pass
+
+        # Fallback to legacy google_translate_say (or any tts.*_say provided via options)
+        raw = (opts.get("tts_service") or "google_translate_say").strip()
+        if raw.startswith("tts."):
+            _, raw = raw.split(".", 1)
+        # If someone mistakenly put a TTS entity as service, coerce to google_translate_say
+        if raw.startswith("google_translate") and not raw.endswith("_say"):
+            raw = "google_translate_say"
+
+        payload = {
+            "entity_id": media_player,
+            "message": text,
+            "language": language,
+            "cache": False,
+        }
+        _ha_call_service(url, token, "tts", raw, payload)
+
     except Exception as e:
         _log("WARN", f"TTS failed: {e}")
+
 
 # ----------------------- HA State/Availability -----------
 def _get_state(entity_id: str, opts: dict) -> str:
@@ -643,20 +677,6 @@ def operate_machine(mid: str, minutes: Optional[int]) -> bool:
         t.start()
     return True
 
-# ----------------------- Core Charge ---------------------
-async def _auto_release_after(machine: str, duration_s: int):
-    try:
-        await asyncio.sleep(max(1, duration_s))
-        # ADAM / HA switch kapatma
-        opts = _read_options()
-        url = opts.get("ha_url") or "http://supervisor/core"
-        token = _resolve_token(opts.get("ha_token"))
-        switch, _sensor = _machine_entities(machine, opts)
-        if token and switch:
-            await _ha_call_service_async(url, token, "switch", "turn_off", {"entity_id": switch})
-    except Exception:
-        pass
-
 
 def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minutes: Optional[int], opts: dict) -> dict:
     """
@@ -714,13 +734,11 @@ def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minut
                 append_transaction(tenant_code, machine, 0.0, bal0, bal0, m, success=False)
             raise HTTPException(status_code=500, detail="ACTIVATION_FAILED")
 
-        # ---- BURADAN İTİBAREN: Soft-busy timer + hold için auto-release ----
+        # Soft-busy timer + hold için auto-release ----
         duration_s = int(m or 0) * 60
         if duration_s > 0:
-            # UI tarafında /machines için timer-bazlı busy
             ACTIVE_UNTIL[machine] = time.time() + duration_s
 
-            # Hold modunda süre bitince switch'i otomatik kapat
             mode = str(opts.get("do_mode") or "pulse").lower()
             if mode == "hold":
                 def _auto_release():
@@ -731,10 +749,8 @@ def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minut
                         if token and switch:
                             _ha_call_service(url, token, "switch", "turn_off", {"entity_id": switch})
                     except Exception:
-                        # Sessiz geç; ikinci bir kapatma denemesi zarar vermez
                         pass
                 threading.Timer(duration_s, _auto_release).start()
-        # ---- /YENİ KISIM ----
 
         with file_lock(GLOBAL_LOCK, timeout=10.0):
             accounts = read_accounts()
@@ -748,7 +764,6 @@ def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minut
                         _ha_call_service(url, token, "switch", "turn_off", {"entity_id": switch})
                 except Exception:
                     pass
-                # Soft-busy'yi temizle (aktivasyon oldu ama rollback edildi)
                 ACTIVE_UNTIL.pop(machine, None)
                 raise HTTPException(status_code=404, detail="TENANT_NOT_FOUND")
 
@@ -764,7 +779,6 @@ def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minut
                 except Exception:
                     pass
                 append_transaction(tenant_code, machine, 0.0, bal_before, bal_before, m, success=False)
-                # Soft-busy'yi temizle (aktivasyon oldu ama ödeme reddedildi)
                 ACTIVE_UNTIL.pop(machine, None)
                 raise HTTPException(status_code=402, detail="INSUFFICIENT_FUNDS")
 
@@ -942,15 +956,38 @@ def _evdev_thread():
     sm = KeypadStateMachine(opts_provider=_read_options, speak_fn=speak, handle_charge_fn=_handle_charge)
 
     while True:
-        path = _find_keypad_device()
-        if not path:
-            _log("WARN", "No keypad input device found under /dev/input (will retry in 5s)")
-            time.sleep(5.0)
-            continue
+        # Prefer explicitly configured device; otherwise scan /dev/input
+        try:
+            opts_local = _read_options()
+        except Exception:
+            opts_local = {}
+        path = (opts_local.get("keypad_device") or "").strip()
 
+        if not path:
+            path = _find_keypad_device()
+            if not path:
+                _log("WARN", "No keypad input device found under /dev/input (will retry in 5s)")
+                time.sleep(5.0)
+                continue
+            else:
+                _log("INFO", f"Keypad(evdev) selected by scan: {path}")
+        else:
+            # If a by-id path is configured but missing, fall back to scan
+            if not os.path.exists(path):
+                _log("WARN", f"Configured keypad_device not found: {path} (falling back to scan)")
+                path = _find_keypad_device()
+                if not path:
+                    time.sleep(5.0)
+                    continue
+                _log("INFO", f"Keypad(evdev) fallback by scan: {path}")
+            else:
+                _log("INFO", f"Keypad(evdev) using configured device: {path}")
+
+        # Try opening the device
         try:
             dev = InputDevice(path)
-            _log("INFO", f"Keypad(evdev) listening on {path} ({getattr(dev, 'name', 'unknown')})")
+            dev_name = getattr(dev, "name", "unknown")
+            _log("INFO", f"Keypad(evdev) listening on {path} ({dev_name})")
         except Exception as e:
             _log("WARN", f"Failed to open input device {path}: {e} (retry in 5s)")
             time.sleep(5.0)
@@ -964,6 +1001,7 @@ def _evdev_thread():
 
                 # Try resolve by key name first (from evdev.categorize)
                 sym = None
+                name = ""
                 try:
                     key = categorize(event)
                     name = key.keycode if isinstance(key.keycode, str) else (
@@ -983,8 +1021,7 @@ def _evdev_thread():
                 # Honor confirm_keys from options as extra ENTER codes
                 if not sym:
                     try:
-                        opts = _read_options()
-                        ckeys = set(int(x) for x in (opts.get("confirm_keys") or []))
+                        ckeys = set(int(x) for x in (opts_local.get("confirm_keys") or []))
                         if int(event.code) in ckeys:
                             sym = "ENTER"
                     except Exception:
@@ -1014,6 +1051,7 @@ def _evdev_thread():
                 pass
             time.sleep(2.0)
             continue
+
 
 def _find_keypad_device(patterns=("event*",)):
     try:
@@ -1617,43 +1655,43 @@ def machines():
         switch, sensor = _machine_entities(mid, opts)
         try_price = _price_for(mid, opts)
 
-        # Varsayılanlar
+        # Defaults
         state = "unknown"
         busy_source = "unknown"
 
-        # Kapalı makine
+        # Disabled machine
         if not machine_enabled(mid, opts):
             err = "disabled"
             state = "disabled"
         else:
-            # Kaynakları hazırla
+            # Prepare sources
             has_adam = bool((opts.get("adam_host") or "").strip())
             r, di = _machine_adam_mapping(mid, opts)
-            di_val = None  # True=aktif, False=pasif, None=bilinmiyor
+            di_val = None  # True=active, False=inactive, None=unknown
 
-            # ADAM DI oku (varsa) ve invert uygula
+            # Read ADAM DI (if present) and optionally invert
             if has_adam and di is not None:
-                raw = _adam_read_di(di, opts)  # True/False/None bekleniyor
+                raw = _adam_read_di(di, opts)  # True/False/None expected
                 if raw is not None:
                     di_val = bool(raw)
                     if invert_di:
                         di_val = not di_val
 
-            # HA sensöründen oku (gerekirse)
+            # Read from HA sensor (if token present)
             ha_state = None
             if has_token:
-                ha_state = _get_state(sensor, opts)  # "on"/"off"/"unknown" gibi
+                ha_state = _get_state(sensor, opts)  # strings like "on"/"off"/"unknown"
 
-            # Timer
+            # Timer-based soft busy
             soft = _soft_busy(mid)
 
-            # ---- Karar mantığı ----
+            # ---- Decision logic ----
             if mode == "hold":
-                # 1) DI öncelikli
+                # 1) DI has priority
                 if di_val is True:
                     state, busy_source = "on", "di"
                 elif di_val is False:
-                    # DI pasif; süre varsa timer'a düşer, yoksa HA'ya bakar
+                    # DI inactive; if timer exists use it, otherwise fall back to HA
                     if soft:
                         state, busy_source = "on", "timer"
                     elif ha_state in ("on", "off"):
@@ -1661,7 +1699,7 @@ def machines():
                     else:
                         state, busy_source = "off", "di"
                 else:
-                    # DI bilinmiyor → HA ya da timer
+                    # DI unknown -> prefer HA, then timer
                     if ha_state in ("on", "off"):
                         state, busy_source = ha_state, "ha"
                     elif soft:
@@ -1670,11 +1708,11 @@ def machines():
                         state, busy_source = "unknown", "none"
             else:
                 # mode == "pulse"
-                # 1) Timer öncelikli (satın alınan süre boyunca busy)
+                # 1) Timer has priority (busy during purchased time)
                 if soft:
                     state, busy_source = "on", "timer"
                 else:
-                    # Timer yoksa DI varsa ona bak; o da yoksa HA
+                    # If no timer: prefer DI; otherwise HA; otherwise assume "off"
                     if di_val is True:
                         state, busy_source = "on", "di"
                     elif di_val is False:
@@ -1696,7 +1734,7 @@ def machines():
             "ha_switch": switch,
             "ha_sensor": sensor,
             "state": state,                 # "on"/"off"/"disabled"/"unknown"
-            "busy_source": busy_source,     # "di"/"timer"/"ha"/"none"/"unknown" (teşhis için faydalı)
+            "busy_source": busy_source,     # "di"/"timer"/"ha"/"none"/"unknown" (diagnostics)
             "price": try_price,
             "default_minutes": _default_minutes_for(mid, opts),
             "error": err
