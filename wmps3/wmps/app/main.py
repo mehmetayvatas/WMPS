@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional, Union, List, Tuple
+from typing import Dict
 
 # Optional imports (guarded)
 try:
@@ -61,6 +62,8 @@ TRANSACTIONS_HEADER = "timestamp,tenant_code,machine_number,amount_charged,balan
 
 # ADAM-6050 mapping: DO0..DO5 are Modbus coils 16..21
 ADAM_COIL_BASE = 16
+
+ACTIVE_UNTIL: Dict[str, float] = {}
 
 app = FastAPI(title="WMPS API", version="3.2.0")
 
@@ -641,6 +644,20 @@ def operate_machine(mid: str, minutes: Optional[int]) -> bool:
     return True
 
 # ----------------------- Core Charge ---------------------
+async def _auto_release_after(machine: str, duration_s: int):
+    try:
+        await asyncio.sleep(max(1, duration_s))
+        # ADAM / HA switch kapatma
+        opts = _read_options()
+        url = opts.get("ha_url") or "http://supervisor/core"
+        token = _resolve_token(opts.get("ha_token"))
+        switch, _sensor = _machine_entities(machine, opts)
+        if token and switch:
+            await _ha_call_service_async(url, token, "switch", "turn_off", {"entity_id": switch})
+    except Exception:
+        pass
+
+
 def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minutes: Optional[int], opts: dict) -> dict:
     """
     Core flow:
@@ -697,6 +714,28 @@ def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minut
                 append_transaction(tenant_code, machine, 0.0, bal0, bal0, m, success=False)
             raise HTTPException(status_code=500, detail="ACTIVATION_FAILED")
 
+        # ---- BURADAN İTİBAREN: Soft-busy timer + hold için auto-release ----
+        duration_s = int(m or 0) * 60
+        if duration_s > 0:
+            # UI tarafında /machines için timer-bazlı busy
+            ACTIVE_UNTIL[machine] = time.time() + duration_s
+
+            # Hold modunda süre bitince switch'i otomatik kapat
+            mode = str(opts.get("do_mode") or "pulse").lower()
+            if mode == "hold":
+                def _auto_release():
+                    try:
+                        url = opts.get("ha_url") or "http://supervisor/core"
+                        token = _resolve_token(opts.get("ha_token"))
+                        switch, _sensor = _machine_entities(machine, opts)
+                        if token and switch:
+                            _ha_call_service(url, token, "switch", "turn_off", {"entity_id": switch})
+                    except Exception:
+                        # Sessiz geç; ikinci bir kapatma denemesi zarar vermez
+                        pass
+                threading.Timer(duration_s, _auto_release).start()
+        # ---- /YENİ KISIM ----
+
         with file_lock(GLOBAL_LOCK, timeout=10.0):
             accounts = read_accounts()
             if tenant_code not in accounts:
@@ -709,6 +748,8 @@ def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minut
                         _ha_call_service(url, token, "switch", "turn_off", {"entity_id": switch})
                 except Exception:
                     pass
+                # Soft-busy'yi temizle (aktivasyon oldu ama rollback edildi)
+                ACTIVE_UNTIL.pop(machine, None)
                 raise HTTPException(status_code=404, detail="TENANT_NOT_FOUND")
 
             bal_before = float(accounts[tenant_code].get("balance", 0.0))
@@ -723,6 +764,8 @@ def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minut
                 except Exception:
                     pass
                 append_transaction(tenant_code, machine, 0.0, bal_before, bal_before, m, success=False)
+                # Soft-busy'yi temizle (aktivasyon oldu ama ödeme reddedildi)
+                ACTIVE_UNTIL.pop(machine, None)
                 raise HTTPException(status_code=402, detail="INSUFFICIENT_FUNDS")
 
             bal_after = bal_before - p
@@ -1560,46 +1603,107 @@ def machines():
     ids = wm + dm
 
     has_token = bool(_resolve_token(opts.get("ha_token")))  # env-aware token check
+    mode = str(opts.get("do_mode") or "pulse").lower()
+    invert_di = bool(opts.get("invert_di"))
     out = []
+
+    def _soft_busy(mid: str) -> bool:
+        try:
+            return time.time() < float(ACTIVE_UNTIL.get(mid, 0))
+        except Exception:
+            return False
 
     for mid in sorted(ids, key=lambda s: int(s)):
         switch, sensor = _machine_entities(mid, opts)
         try_price = _price_for(mid, opts)
 
-        # Prefer ADAM DI if configured
-        r, di = _machine_adam_mapping(mid, opts)
+        # Varsayılanlar
         state = "unknown"
+        busy_source = "unknown"
 
+        # Kapalı makine
         if not machine_enabled(mid, opts):
+            err = "disabled"
             state = "disabled"
         else:
-            if ((opts.get("adam_host") or "").strip()) and di is not None:
-                di_state = _adam_read_di(di, opts)
-                if di_state is not None:
-                    state = "on" if di_state else "off"
-                else:
-                    state = _get_state(sensor, opts) if has_token else ("simulated" if opts.get("simulate") else "unknown")
-            else:
-                state = _get_state(sensor, opts) if has_token else ("simulated" if opts.get("simulate") else "unknown")
+            # Kaynakları hazırla
+            has_adam = bool((opts.get("adam_host") or "").strip())
+            r, di = _machine_adam_mapping(mid, opts)
+            di_val = None  # True=aktif, False=pasif, None=bilinmiyor
 
-        err = (
-            "disabled"
-            if not machine_enabled(mid, opts)
-            else ("" if (opts.get("simulate") or has_token or (opts.get("adam_host") or "").strip()) else "no_token")
-        )
+            # ADAM DI oku (varsa) ve invert uygula
+            if has_adam and di is not None:
+                raw = _adam_read_di(di, opts)  # True/False/None bekleniyor
+                if raw is not None:
+                    di_val = bool(raw)
+                    if invert_di:
+                        di_val = not di_val
+
+            # HA sensöründen oku (gerekirse)
+            ha_state = None
+            if has_token:
+                ha_state = _get_state(sensor, opts)  # "on"/"off"/"unknown" gibi
+
+            # Timer
+            soft = _soft_busy(mid)
+
+            # ---- Karar mantığı ----
+            if mode == "hold":
+                # 1) DI öncelikli
+                if di_val is True:
+                    state, busy_source = "on", "di"
+                elif di_val is False:
+                    # DI pasif; süre varsa timer'a düşer, yoksa HA'ya bakar
+                    if soft:
+                        state, busy_source = "on", "timer"
+                    elif ha_state in ("on", "off"):
+                        state, busy_source = ha_state, "ha"
+                    else:
+                        state, busy_source = "off", "di"
+                else:
+                    # DI bilinmiyor → HA ya da timer
+                    if ha_state in ("on", "off"):
+                        state, busy_source = ha_state, "ha"
+                    elif soft:
+                        state, busy_source = "on", "timer"
+                    else:
+                        state, busy_source = "unknown", "none"
+            else:
+                # mode == "pulse"
+                # 1) Timer öncelikli (satın alınan süre boyunca busy)
+                if soft:
+                    state, busy_source = "on", "timer"
+                else:
+                    # Timer yoksa DI varsa ona bak; o da yoksa HA
+                    if di_val is True:
+                        state, busy_source = "on", "di"
+                    elif di_val is False:
+                        state, busy_source = "off", "di"
+                    elif ha_state in ("on", "off"):
+                        state, busy_source = ha_state, "ha"
+                    else:
+                        state, busy_source = "off", "none"
+
+            err = (
+                "disabled"
+                if not machine_enabled(mid, opts)
+                else ("" if (opts.get("simulate") or has_token or (opts.get("adam_host") or "").strip()) else "no_token")
+            )
 
         out.append({
             "id": mid,
             "category": "washing" if mid in wm else "dryer",
             "ha_switch": switch,
             "ha_sensor": sensor,
-            "state": state,
+            "state": state,                 # "on"/"off"/"disabled"/"unknown"
+            "busy_source": busy_source,     # "di"/"timer"/"ha"/"none"/"unknown" (teşhis için faydalı)
             "price": try_price,
             "default_minutes": _default_minutes_for(mid, opts),
             "error": err
         })
 
     return {"ok": True, "machines": out, "simulate": bool(opts.get("simulate", False))}
+
 
 
 # ----------------------- Accounts ------------------------
