@@ -1,6 +1,6 @@
 name: WMPS3
 slug: wmps3
-version: "0.3.22"
+version: "0.3.23"
 description: Cashless laundry payment system (WMPS) — simulate & per-machine toggles with ADAM-6050 and HA-keypad support
 url: https://example.com/wmps3
 arch: [aarch64, amd64, armhf, armv7, i386]
@@ -11,7 +11,7 @@ homeassistant_api: true
 
 # Permissions
 apparmor: false
-full_access: true         
+full_access: true
 # privileged:
 #   - SYS_ADMIN
 #   - SYS_RAWIO
@@ -37,10 +37,11 @@ options:
   # Keypad / TTS
   keypad_source: "evdev"
   keypad_device: "/dev/input/by-id/usb-SIGMACHIP_USB_Keyboard-event-kbd"
-  ha_event_type: "keyboard_remote_command_received"   
-  confirm_keys: [28, 96]                               # Enter (28), Keypad Enter (96)
+  ha_event_type: "keyboard_remote_command_received"
+  confirm_keys: [28, 96]            # Enter (28), Keypad Enter (96)
   tts_entity_id: "tts.google_translate_en_com"
   tts_language: "en"
+  tts_service: "google_translate_say"  # legacy fallback service
   media_player: "media_player.vlc_telnet"
 
   # ADAM & run-mode
@@ -81,8 +82,8 @@ options:
       label: "Washing Machine 1"
       cycle_minutes: 30
       price: 5.0
-      ha_switch: switch.washer_1_control
-      ha_sensor: binary_sensor.washer_1_status
+      ha_switch: "switch.washer_1_control"
+      ha_sensor: "binary_sensor.washer_1_status"
       relay: 0
       di: 0
       do_mode: pulse
@@ -91,8 +92,8 @@ options:
       label: "Washing Machine 2"
       cycle_minutes: 30
       price: 5.0
-      ha_switch: switch.washer_2_control
-      ha_sensor: binary_sensor.washer_2_status
+      ha_switch: "switch.washer_2_control"
+      ha_sensor: "binary_sensor.washer_2_status"
       relay: 1
       di: 1
       do_mode: pulse
@@ -101,8 +102,8 @@ options:
       label: "Washing Machine 3"
       cycle_minutes: 30
       price: 5.0
-      ha_switch: switch.washer_3_control
-      ha_sensor: binary_sensor.washer_3_status
+      ha_switch: "switch.washer_3_control"
+      ha_sensor: "binary_sensor.washer_3_status"
       relay: 2
       di: 2
       do_mode: pulse
@@ -111,8 +112,8 @@ options:
       label: "Dryer 1"
       cycle_minutes: 60
       price: 5.0
-      ha_switch: switch.dryer_4_control
-      ha_sensor: binary_sensor.dryer_4_status
+      ha_switch: "switch.dryer_4_control"
+      ha_sensor: "binary_sensor.dryer_4_status"
       relay: 3
       di: 3
       do_mode: pulse
@@ -121,8 +122,8 @@ options:
       label: "Dryer 2"
       cycle_minutes: 60
       price: 5.0
-      ha_switch: switch.dryer_5_control
-      ha_sensor: binary_sensor.dryer_5_status
+      ha_switch: "switch.dryer_5_control"
+      ha_sensor: "binary_sensor.dryer_5_status"
       relay: 4
       di: 4
       do_mode: pulse
@@ -131,8 +132,8 @@ options:
       label: "Dryer 3"
       cycle_minutes: 60
       price: 5.0
-      ha_switch: switch.dryer_6_control
-      ha_sensor: binary_sensor.dryer_6_status
+      ha_switch: "switch.dryer_6_control"
+      ha_sensor: "binary_sensor.dryer_6_status"
       relay: 5
       di: 5
       do_mode: pulse
@@ -149,6 +150,7 @@ schema:
 
   tts_entity_id: str?
   tts_language: str?
+  tts_service: str?
   media_player: str?
 
   adam_host: str?
