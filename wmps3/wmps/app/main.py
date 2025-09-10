@@ -1295,7 +1295,7 @@ h2{
 
 .grid{
   display:grid;
-  grid-template-columns: 1.25fr 1fr;
+  grid-template-columns: 1.6fr 1fr; /* left wider */
   grid-auto-rows: auto;
   grid-auto-flow: row dense;
   gap:12px;
@@ -1303,22 +1303,26 @@ h2{
   max-width:1280px; margin:0 auto;
 }
 
-.grid > .card:nth-of-type(3){ grid-column:1; grid-row:1; }
-.grid > .card:nth-of-type(4){ grid-column:2; grid-row:1 / span 3; }
-.grid > .card:nth-of-type(5){ grid-column:1; grid-row:2; }
-.grid > .card:nth-of-type(6){ grid-column:1; grid-row:3; }
-.grid > .card:nth-of-type(1){ grid-column:1 / -1; grid-row:4; }
-.grid > .card:nth-of-type(2){ grid-column:1 / -1; grid-row:5; }
+
+/* Desktop placement */
+.grid > .card:nth-of-type(3){ grid-column:1; grid-row:1; }           /* Add / Update User */
+.grid > .card:nth-of-type(1){ grid-column:2; grid-row:1; }           /* Machines (compact) */
+.grid > .card:nth-of-type(4){ grid-column:2; grid-row:2; }           /* Settings under Machines */
+.grid > .card:nth-of-type(5){ grid-column:1; grid-row:2; }           /* Quick Charge under Add/Update */
+.grid > .card:nth-of-type(6){ grid-column:2; grid-row:3; }           /* CSV under Settings */
+.grid > .card:nth-of-type(2){ grid-column:1 / -1; grid-row:4; }      /* Transaction History full width */
+
 
 @media (max-width:1024px){
   .grid{ grid-template-columns:1fr; }
-  .grid > .card:nth-of-type(3){ grid-column:1; grid-row:1; }
-  .grid > .card:nth-of-type(5){ grid-column:1; grid-row:2; }
-  .grid > .card:nth-of-type(6){ grid-column:1; grid-row:3; }
-  .grid > .card:nth-of-type(4){ grid-column:1; grid-row:4; }
-  .grid > .card:nth-of-type(1){ grid-column:1; grid-row:5; }
-  .grid > .card:nth-of-type(2){ grid-column:1; grid-row:6; }
+  .grid > .card:nth-of-type(3){ grid-column:1; grid-row:1; } /* Add/Update */
+  .grid > .card:nth-of-type(5){ grid-column:1; grid-row:2; } /* Quick Charge */
+  .grid > .card:nth-of-type(1){ grid-column:1; grid-row:3; } /* Machines */
+  .grid > .card:nth-of-type(4){ grid-column:1; grid-row:4; } /* Settings */
+  .grid > .card:nth-of-type(6){ grid-column:1; grid-row:5; } /* CSV */
+  .grid > .card:nth-of-type(2){ grid-column:1; grid-row:6; } /* History */
 }
+
 
 .card{
   background:linear-gradient(180deg, rgba(20,29,50,.70), rgba(17,26,46,.92));
@@ -1331,13 +1335,20 @@ h2{
 }
 .card h3{ margin:0 0 8px 0; font-size:18px; font-weight:700 }
 
-label{ display:block; margin:6px 0 6px 2px; font-size:12px; color:var(--muted) }
+label{
+  display:block;
+  margin:6px 2px 6px 2px;
+  font-size:13px;
+  font-weight:600;
+  color:#cfe1ff;
+  letter-spacing:.2px;
+}
 input{
   width:100%; padding:10px 12px; border-radius:var(--radius-xs);
   border:1px solid var(--line); background:#0c1628; color:#eaf1f8;
   outline:none; transition: border-color .15s, box-shadow .15s, background .15s;
 }
-input::placeholder{ color:#7d94ad }
+input::placeholder{ color:#94a3b8 }
 input:hover{ border-color:#35507b }
 input:focus-visible{ border-color:var(--accent); box-shadow:var(--ring); background:#0d1a30 }
 
@@ -1363,7 +1374,7 @@ select:focus-visible{ border-color:var(--accent); box-shadow:var(--ring); backgr
   position: absolute;
   background: #0c1628;
   border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-xs);
   min-width: 160px;
   z-index: 10;
 }
@@ -1376,7 +1387,7 @@ select:focus-visible{ border-color:var(--accent); box-shadow:var(--ring); backgr
 .dropdown-content a:hover {
   background: #162544;
 }
-.dropdown:hover .dropdown-content {
+.dropdown.open .dropdown-content {
   display: block;
 }
 
@@ -1416,6 +1427,11 @@ input, select{
   overflow:auto;
 }
 
+#machines_table{
+  max-height: 240px;   /* tighten */
+  overflow:auto;
+}
+
 .table-host thead th{
   text-transform: uppercase;
   letter-spacing:.02em;
@@ -1441,6 +1457,13 @@ button{
   box-shadow:var(--shadow-2);
   transition: transform .06s, filter .15s, box-shadow .15s;
 }
+
+button.btn-xs{
+  padding:9px 12px;          /* normal button padding */
+  font-size:14px;            /* normal text size */
+  border-radius:var(--radius-xs);
+}
+
 button:hover{ filter:brightness(1.05) }
 button:active{ transform:translateY(1px) }
 button:focus-visible{ box-shadow:var(--ring) }
@@ -1548,8 +1571,8 @@ a:hover{ text-decoration:underline }
   <table id="history">
     <thead>
       <tr>
-        <th>Time (NZ)</th>
-        <th>Tenant</th>
+        <th>Time</th>
+        <th>Account ID</th>
         <th>Machine</th>
         <th>Charged</th>
         <th>Balance After</th>
@@ -1582,13 +1605,13 @@ a:hover{ text-decoration:underline }
 
   <!-- form fields -->
   <div class="row">
-      <label>account_id</label><input id="u_code" placeholder="6-digit account id"/>
-      <label>full_name</label><input id="u_name" placeholder="Full name"/>
+      <label>Account ID</label><input id="u_code" placeholder="6-digit Account ID"/>
+      <label>Full name</label><input id="u_name" placeholder="Full name"/>
   </div>
 
   <div class="row">
-    <label>current_balance</label><input id="u_balance_current" value="0" readonly/>
-    <label>top_up_amount</label><input id="u_topup" placeholder="e.g. 25"/>
+    <label>Current balance</label><input id="u_balance_current" value="0" readonly/>
+    <label>Top-up amount</label><input id="u_topup" placeholder="e.g. 25"/>
   </div>
 
   <!-- legacy button kept (hidden) so nothing breaks -->
@@ -1611,25 +1634,25 @@ a:hover{ text-decoration:underline }
   <!-- Machines -->
   <div class="muted" style="margin:6px 0 -2px 2px;">Machines</div>
   <div class="row">
-    <div><label>washing_machines (comma)</label><input id="cfg_wm" placeholder="1,2,3"/></div>
-    <div><label>dryer_machines (comma)</label><input id="cfg_dm" placeholder="4,5,6"/></div>
+    <label>Washing machines (comma-separated)</label><input id="cfg_wm" placeholder="1,2,3"/></div>
+    <label>Dryer machines (comma-separated)</label><input id="cfg_dm" placeholder="4,5,6"/></div>
   </div>
 
   <!-- Durations -->
   <div class="row">
-    <div><label>washing_minutes</label><input id="cfg_wmin" placeholder="30"/></div>
-    <div><label>dryer_minutes</label><input id="cfg_dmin" placeholder="60"/></div>
+    <label>Washing minutes</label><input id="cfg_wmin" placeholder="30"/></div>
+    <label>Dryer minutes</label><input id="cfg_dmin" placeholder="60"/></div>
   </div>
 
   <!-- Pricing -->
   <div class="row">
-    <div><label>price_washing</label><input id="cfg_wp" placeholder="5"/></div>
-    <div><label>price_dryer</label><input id="cfg_dp" placeholder="5"/></div>
+    <label>Price — Washing</label><input id="cfg_wp" placeholder="5"/></div>
+    <label>Price — Dryer</label><input id="cfg_dp" placeholder="5"/></div>
   </div>
 
   <!-- Disabled -->
   <div class="row">
-    <div><label>disabled_machines (comma)</label><input id="cfg_disabled" placeholder="e.g. 2,5"/></div>
+    <label>Disabled machines (comma-separated)</label><input id="cfg_disabled" placeholder="e.g. 2,5"/></div>
     <div></div>
   </div>
 
@@ -1649,11 +1672,11 @@ a:hover{ text-decoration:underline }
 
   <div class="row">
     <div>
-      <label>account_id</label>
+      <label>Account ID</label>
       <input id="qc_tenant" placeholder="123456"/>
     </div>
     <div>
-      <label>machine</label>
+      <label>Machine</label>
       <select id="qc_machine">
         <option value="">Select machine...</option>
       </select>
@@ -1662,11 +1685,11 @@ a:hover{ text-decoration:underline }
 
   <div class="row">
     <div>
-      <label>price (optional)</label>
+      <label>Price (optional)</label>
       <input id="qc_price" placeholder="leave blank for category/price_map"/>
     </div>
     <div>
-      <label>minutes (optional)</label>
+      <label>Minutes (optional)</label>
       <input id="qc_minutes" placeholder="leave blank for default minutes"/>
     </div>
   </div>
@@ -1682,29 +1705,21 @@ a:hover{ text-decoration:underline }
   <div class="card">
   <h3>CSV Files</h3>
 
-  <div class="row">
-    <div class="dropdown">
-      <button>Download v</button>
-      <div class="dropdown-content">
-        <a href="./download?file=accounts">Accounts.csv</a>
-        <a href="./download?file=transactions">Transactions.csv</a>
-      </div>
+ <div class="row">
+  <div class="dropdown" id="dl_box">
+    <button id="dl_btn" class="btn-xs">Download</button>
+    <div class="dropdown-content" id="dl_menu">
+      <a href="#" data-file="accounts">Accounts.csv</a>
+      <a href="#" data-file="transactions">Transactions.csv</a>
     </div>
-
-    <div class="dropdown">
-      <button>Open Data v</button>
-      <div class="dropdown-content">
-        <a href="#" onclick="openData('accounts')">Accounts</a>
-        <a href="#" onclick="openData('transactions')">Transactions</a>
-      </div>
-    </div>
-
-    <input type="file" id="uploadCsv" accept=".csv" />
-    <button onclick="uploadAuto()">Upload CSV</button>
   </div>
+  <button class="btn-xs" onclick="uploadAuto()">Upload CSV</button>
+</div>
+
 
   <div id="csv_table" class="table-host"></div>
 </div>
+
 
 
 <script>
@@ -1829,15 +1844,16 @@ function _normalizeList(v) {
 }
 function buildSettingsKV(settings){
   return [
-    ['washing_machines', _csvJoin(settings.washing_machines ?? [])],
-    ['dryer_machines', _csvJoin(settings.dryer_machines ?? [])],
-    ['washing_minutes', String(settings.washing_minutes ?? '')],
-    ['dryer_minutes',   String(settings.dryer_minutes ?? '')],
-    ['price_washing',   String(settings.price_washing ?? '')],
-    ['price_dryer',     String(settings.price_dryer ?? '')],
-    ['disabled_machines', _csvJoin(settings.disabled_machines ?? [])],
+    ['Washing machines', _csvJoin(settings.washing_machines ?? [])],
+    ['Dryer machines', _csvJoin(settings.dryer_machines ?? [])],
+    ['Washing minutes', String(settings.washing_minutes ?? '')],
+    ['Dryer minutes',   String(settings.dryer_minutes ?? '')],
+    ['Price — Washing', String(settings.price_washing ?? '')],
+    ['Price — Dryer',   String(settings.price_dryer ?? '')],
+    ['Disabled machines', _csvJoin(settings.disabled_machines ?? [])],
   ];
 }
+
 function renderSettingsTable(settings){
   const host = document.getElementById('cfg_table');
   if (!host) return;
@@ -1851,7 +1867,7 @@ function renderSettingsTable(settings){
   host.innerHTML = `
     <table>
       <thead>
-        <tr><th>key</th><th>value</th></tr>
+        <tr><th>Setting</th><th>Value</th></tr>
       </thead>
       <tbody>
         ${trs}
@@ -1889,14 +1905,14 @@ function renderQuickChargeResult(res) {
   }
 
   const rows = `
-    <tr><td>account_id</td><td>${res.account_id || ''}</td></tr>
-    <tr><td>name</td><td>${res.name || ''}</td></tr>
-    <tr><td>selected_machine</td><td>${res.machine || ''}</td></tr>
-    <tr><td>status</td><td style="color:${res.status === 'OK' ? '#4ade80' : '#f87171'}">${res.status}</td></tr>
-    ${res.charged != null ? `<tr><td>charged</td><td>${res.charged}</td></tr>` : ''}
-    ${res.balance_before != null ? `<tr><td>balance_before</td><td>${res.balance_before}</td></tr>` : ''}
-    ${res.balance_after  != null ? `<tr><td>balance_after</td><td>${res.balance_after}</td></tr>` : ''}
-    ${res.cycle_minutes  != null ? `<tr><td>cycle_minutes</td><td>${res.cycle_minutes}</td></tr>` : ''}
+    <tr><td>Account ID</td><td>${res.account_id || ''}</td></tr>
+    <tr><td>Name</td><td>${res.name || ''}</td></tr>
+    <tr><td>Machine</td><td>${res.machine || ''}</td></tr>
+    <tr><td>Status</td><td style="color:${res.status === 'OK' ? '#4ade80' : '#f87171'}">${res.status}</td></tr>
+    ${res.charged != null ? `<tr><td>Charged</td><td>${res.charged}</td></tr>` : ''}
+    ${res.balance_before != null ? `<tr><td>Balance before</td><td>${res.balance_before}</td></tr>` : ''}
+    ${res.balance_after  != null ? `<tr><td>Balance after</td><td>${res.balance_after}</td></tr>` : ''}
+    ${res.cycle_minutes  != null ? `<tr><td>Minutes</td><td>${res.cycle_minutes}</td></tr>` : ''}
   `;
 
   host.innerHTML = `
@@ -2021,13 +2037,13 @@ function renderUserTable(rec) {
   host.innerHTML = `
     <table>
       <thead>
-        <tr>
-          <th>account_id</th>
-          <th>name</th>
-          <th>balance</th>
-          <th>last_transaction_utc</th>
-        </tr>
-      </thead>
+          <tr>
+            <th>Account ID</th>
+            <th>Name</th>
+            <th>Balance</th>
+            <th>Last transaction (UTC)</th>
+          </tr>
+        </thead>
       <tbody>
         <tr>
           <td>${rec.tenant_code}</td>
@@ -2255,10 +2271,10 @@ function renderCsvTable(data, type) {
       <table>
         <thead>
           <tr>
-            <th>tenant_code</th>
-            <th>name</th>
-            <th>balance</th>
-            <th>last_transaction_utc</th>
+            <th>Account ID</th>
+            <th>Name</th>
+            <th>Balance</th>
+            <th>Last transaction</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
@@ -2287,13 +2303,13 @@ function renderCsvTable(data, type) {
       <table>
         <thead>
           <tr>
-            <th>timestamp</th>
-            <th>tenant_code</th>
-            <th>machine_number</th>
-            <th>amount_charged</th>
-            <th>balance_after</th>
-            <th>cycle_minutes</th>
-            <th>success</th>
+            <th>Time</th>
+            <th>Account ID</th>
+            <th>Machine</th>
+            <th>Charged</th>
+            <th>Balance after</th>
+            <th>Minutes</th>
+            <th>Success</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
@@ -2381,34 +2397,42 @@ async function cat(file, where) {
 }
 
 async function uploadAuto() {
-  const input = document.getElementById('uploadCsv');
-  const file = input.files[0];
-  if (!file) { alert('No file selected'); return; }
+  try {
+    const picker = document.createElement('input');
+    picker.type = 'file';
+    picker.accept = '.csv';
+    picker.style.display = 'none';
+    document.body.appendChild(picker);
 
-  // read file as raw bytes (no multipart needed)
-  const buf = await file.arrayBuffer();
+    const file = await new Promise(resolve => {
+      picker.onchange = () => resolve(picker.files && picker.files[0]);
+      picker.click();
+    });
+    document.body.removeChild(picker);
 
-  const res = await fetch('./upload_auto', {
-    method: 'PUT',
-    body: buf
-  });
+    if (!file) return; 
 
-  if (!res.ok) {
-    const txt = await res.text();
-    alert('Upload failed: ' + txt);
-    return;
+    const buf = await file.arrayBuffer();
+
+    const res = await fetch('./upload_auto', {
+      method: 'PUT',
+      body: buf
+    });
+
+    if (!res.ok) {
+      const txt = await res.text();
+      alert('Upload failed: ' + txt);
+      return;
+    }
+
+    const js = await res.json();
+    alert(`Uploaded as ${js.target}.csv (${js.bytes} bytes)`);
+
+    await cat(js.target, 'data');
+    await renderHistory();
+  } catch (err) {
+    alert('Upload failed.');
   }
-
-  const js = await res.json();
-  // js.target is "accounts" or "transactions"
-  alert(`Uploaded as ${js.target}.csv (${js.bytes} bytes)`);
-
-  // refresh preview and history
-  await cat(js.target, 'data');
-  await renderHistory();
-
-  // clear input so the same filename can be re-uploaded later
-  input.value = '';
 }
 
 
@@ -2416,6 +2440,45 @@ async function uploadAuto() {
 async function refresh() { await renderMachines(); await renderHistory(); }
 refresh(); loadConfig();
 initUsersUI();
+(function(){
+  function initDownloadMenu(){
+    const box  = document.getElementById('dl_box');
+    const btn  = document.getElementById('dl_btn');
+    const menu = document.getElementById('dl_menu');
+    if (!box || !btn || !menu) return;
+
+    const close = () => box.classList.remove('open');
+
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      box.classList.toggle('open');
+    });
+
+    menu.addEventListener('click', (e) => {
+      const a = e.target.closest('a');
+      if (!a) return;
+      e.preventDefault();
+      const file = a.dataset.file; // "accounts" | "transactions"
+      if (file) window.location.href = `./download?file=${file}`;
+      close();
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!box.contains(e.target)) close();
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') close();
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initDownloadMenu);
+  } else {
+    initDownloadMenu();
+  }
+})();
+
 </script>
 </body>
 </html>
@@ -2544,22 +2607,33 @@ def accounts_upsert(acc: dict):
     required = {"tenant_code","balance"}
     if not required.issubset(acc.keys()):
         raise HTTPException(status_code=400, detail="tenant_code and balance required")
+
     tenant_code = str(acc.get("tenant_code")).strip()
     name = str(acc.get("name") or "").strip()
     try:
         balance = float(acc.get("balance"))
     except Exception:
         raise HTTPException(status_code=400, detail="balance must be a number")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
     with file_lock(GLOBAL_LOCK, timeout=10.0):
         accounts = read_accounts()
         prev = accounts.get(tenant_code, {})
         accounts[tenant_code] = {
             "name": name or prev.get("name",""),
             "balance": float(balance),
-            "last_transaction_utc": prev.get("last_transaction_utc","")
+            "last_transaction_utc": now_iso
         }
         write_accounts(accounts)
-    return {"ok": True, "tenant_code": tenant_code, "name": name, "balance": float(balance)}
+
+    return {
+        "ok": True,
+        "tenant_code": tenant_code,
+        "name": name,
+        "balance": float(balance),
+        "last_transaction_utc": now_iso
+    }
 
 @app.get("/accounts/list")
 def accounts_list():
