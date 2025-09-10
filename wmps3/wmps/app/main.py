@@ -1295,26 +1295,13 @@ h2{
 
 .grid{
   display:grid;
-  grid-template-columns: 1fr 560px;
-  grid-auto-rows:auto;
-  grid-auto-flow:row dense;
+  /* sol esnek, sağ sabit genişlik (sağdaki mevcut kartlar taşmadan sığsın) */
+  grid-template-columns: minmax(620px, 1fr) 520px;
+  grid-auto-flow: row dense;   /* boşluk kalmasın */
   gap:12px;
   align-items:start;
-  width:100%;
-  margin:0;          
+  max-width:1280px; margin:0 auto;
 }
-
-
-
-/* Desktop placement */
-/* Desktop placement (right column fixed) */
-.grid > .card:nth-of-type(3){ grid-column:1; grid-row:1; } /* Add / Update */
-.grid > .card:nth-of-type(5){ grid-column:1; grid-row:2; } /* Quick Charge */
-.grid > .card:nth-of-type(2){ grid-column:1; grid-row:3; } /* Transaction History */
-
-.grid > .card:nth-of-type(1){ grid-column:2; grid-row:1; } /* Machines */
-.grid > .card:nth-of-type(4){ grid-column:2; grid-row:2; } /* Settings */
-.grid > .card:nth-of-type(6){ grid-column:2; grid-row:3; } /* CSV */
 
 
 
@@ -1328,9 +1315,6 @@ h2{
   .grid > .card:nth-of-type(6){ grid-column:1; grid-row:6; } /* CSV */
 }
 
-
-
-
 .card{
   background:linear-gradient(180deg, rgba(20,29,50,.70), rgba(17,26,46,.92));
   backdrop-filter:blur(6px);
@@ -1340,6 +1324,7 @@ h2{
   box-shadow:var(--shadow-1);
   align-self:start;
 }
+.card{ overflow: visible; }
 .card h3{ margin:0 0 8px 0; font-size:18px; font-weight:700 }
 
 label{
@@ -1554,40 +1539,37 @@ tbody tr:hover{ background:#0f1a2b }
 a{ color:#9cc4ff; text-decoration:none }
 a:hover{ text-decoration:underline }
 
+.col-left  { grid-column: 1; }
+.col-right { grid-column: 2; }
+
+.card{ overflow: visible; }
+
+#user_table.table-host,
+#qc_table.table-host { 
+  max-height: none; 
+  overflow: visible; 
+}
+
+#machines_table{ 
+  max-height: none; 
+  overflow: visible; 
+}
+
+
   </style>
 </head>
 <body>
   <h2>WMPS Control Panel</h2>
   <div class="grid">
 
-    <div class="card">
+    <div class="card col-right">
       <h3>Machines</h3>
       <div id="machines_table" class="table-host"></div>
     </div>
 
 
-    <div class="card">
-      <h3>Transaction History</h3>
-      <div id="history_wrap">
-  <table id="history">
-    <thead>
-      <tr>
-        <th>Time</th>
-        <th>Account ID</th>
-        <th>Machine</th>
-        <th>Charged</th>
-        <th>Balance After</th>
-        <th>Minutes</th>
-        <th>Success</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
-</div>
-      <div class="muted">Showing last 50 entries</div>
-    </div>
-
-    <div class="card">
+    
+    <div class="card col-left">
   <h3>Add / Update User</h3>
 
   <!-- user selector row -->
@@ -1629,7 +1611,7 @@ a:hover{ text-decoration:underline }
 </div>
 
 
-    <div class="card">
+    <div class="card col-right">
   <h3>Settings</h3>
 
   <!-- Machines -->
@@ -1690,7 +1672,7 @@ a:hover{ text-decoration:underline }
 
 
 
-    <div class="card">
+    <div class="card col-left">
   <h3>Quick Charge</h3>
 
   <div class="row">
@@ -1724,8 +1706,30 @@ a:hover{ text-decoration:underline }
   <div id="qc_table" class="table-host"></div>
 </div>
 
+<div class="card col-left">
+      <h3>Transaction History</h3>
+      <div id="history_wrap">
+  <table id="history">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Account ID</th>
+        <th>Machine</th>
+        <th>Charged</th>
+        <th>Balance After</th>
+        <th>Minutes</th>
+        <th>Success</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+      <div class="muted">Showing last 50 entries</div>
+    </div>
 
-  <div class="card">
+
+
+  <div class="card col-right">
   <h3>CSV Files</h3>
 
  <div class="row">
@@ -2414,10 +2418,14 @@ function renderMachinesTable(machines) {
 }
 
 async function cat(file, where) {
-  const res = await fetch(`./debug/cat?file=${file}&where=${where}`);
-  const txt = await res.text();
-  document.getElementById('csv').textContent = txt;
+  try{
+    const res = await fetch(`./debug/cat?file=${file}&where=${where}`);
+    const txt = await res.text();
+    const pre = document.getElementById('csv'); 
+    if (pre) pre.textContent = txt;            
+  }catch(e){ }
 }
+
 
 async function uploadAuto() {
   try {
@@ -2454,11 +2462,12 @@ async function uploadAuto() {
     const js = await res.json();
     alert(`Uploaded as ${js.target}.csv (${js.bytes} bytes)`);
 
-    await cat(js.target, 'data');
-    await renderHistory();
-  } catch (err) {
-    alert('Upload failed.');
-  }
+    try { await cat(js.target, 'data'); } catch(_) {}
+    renderHistory(); 
+    } catch (err) {
+      console.error(err);
+      alert('Upload succeeded but UI refresh failed.'); // gerçek durumu söyle
+    }
 }
 
 
