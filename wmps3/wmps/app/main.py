@@ -556,9 +556,10 @@ def machine_is_available(mid: str, opts: dict) -> bool:
 
 def operate_machine(mid: str, minutes: Optional[int]) -> bool:
     """
-    Returns True if activation succeeded (or simulate), False otherwise.
-    - If ADAM is configured, drive DO (pulse/hold) and confirm via DI (if available).
-    - Otherwise, call HA switch turn_on and confirm via HA sensor.
+    Returns True only if activation is *confirmed* in the real world.
+    - Simülasyon açıkken her zaman False döner (başarılı sayılmaz).
+    - ADAM için: DI varsa DI==True ile, DI yoksa HA sensörü 'on' ile teyit gerekir.
+    - HA için: zaten sensör 'on' teyidi var.
     """
     opts = _read_options()
     simulate = bool(opts.get("simulate", False))
@@ -572,11 +573,12 @@ def operate_machine(mid: str, minutes: Optional[int]) -> bool:
     except Exception:
         confirm_timeout = 8
 
+    # ---- SIMULATION: Gerçek teyit yok => asla başarı sayma
     if simulate:
-        _log("INFO", f"[SIMULATE] turn ON {switch} for {minutes} minutes")
-        return True
+        _log("INFO", f"[SIMULATE] (no real start) would turn ON {switch} for {minutes} minutes")
+        return False
 
-    # ADAM path if available
+    # ---- ADAM path
     if ((opts.get("adam_host") or "").strip()) and r is not None:
         do_mode = (opts.get("do_mode") or "pulse").lower()
         try:
@@ -589,25 +591,32 @@ def operate_machine(mid: str, minutes: Optional[int]) -> bool:
             _log("WARN", f"ADAM: failed to activate relay for machine {mid}")
             return False
 
-        # Confirm via DI if possible
+        # --- SIKI TEYİT: önce DI, DI yoksa HA sensör
         t0 = time.monotonic()
-        confirmed = True  # assume success if no DI configured
-        if di is not None:
-            confirmed = False
-            while time.monotonic() - t0 < confirm_timeout:
-                di_state = _adam_read_di(di, opts)
-                if di_state is True:  # True => BUSY/RUNNING
+        confirmed = False
+
+        while time.monotonic() - t0 < confirm_timeout:
+            if di is not None:
+                di_state = _adam_read_di(di, opts)  # True => RUNNING
+                if di_state is True:
                     confirmed = True
                     break
-                time.sleep(0.5)
+            else:
+                # DI yoksa HA sensör 'on' görmeyi dene
+                if token:
+                    st = _get_state(sensor, opts)
+                    if st in ("on", "true", "1", "running"):
+                        confirmed = True
+                        break
+            time.sleep(0.5)
 
         if not confirmed:
-            _log("WARN", f"Activation not confirmed by ADAM DI index={di} for machine {mid}")
+            _log("WARN", f"Activation not confirmed (ADAM). mid={mid} di={di} sensor={sensor}")
             if do_mode == "hold":
                 _adam_write_coil(r, False, opts)
             return False
 
-        # Schedule turn_off for hold mode
+        # hold modunda süre sonunda off planı (mevcut davranış)
         if do_mode == "hold" and minutes and minutes > 0:
             def turn_off_later():
                 try:
@@ -618,9 +627,10 @@ def operate_machine(mid: str, minutes: Optional[int]) -> bool:
             t = threading.Timer(minutes * 60.0, turn_off_later)
             t.daemon = True
             t.start()
+
         return True
 
-    # HA switch path
+    # ---- HA path (zaten sensörden teyit ediyor)
     if not token:
         _log("WARN", "ha_token missing; cannot control HA.")
         return False
@@ -632,7 +642,7 @@ def operate_machine(mid: str, minutes: Optional[int]) -> bool:
         _log("WARN", f"Failed to turn ON {switch}: {e}")
         return False
 
-    # Confirm activation via HA sensor
+    # Confirm via HA sensor
     t0 = time.monotonic()
     ok = False
     while time.monotonic() - t0 < confirm_timeout:
@@ -660,8 +670,8 @@ def operate_machine(mid: str, minutes: Optional[int]) -> bool:
         t = threading.Timer(minutes * 60.0, turn_off_later)
         t.daemon = True
         t.start()
-    return True
 
+    return True
 
 def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minutes: Optional[int], opts: dict) -> dict:
     """
@@ -1291,6 +1301,99 @@ input::placeholder{ color:#7d94ad }
 input:hover{ border-color:#35507b }
 input:focus-visible{ border-color:var(--accent); box-shadow:var(--ring); background:#0d1a30 }
 
+select{
+  width:100%; padding:10px 12px; border-radius:var(--radius-xs);
+  border:1px solid var(--line); background:#0c1628; color:#eaf1f8;
+  outline:none; transition:border-color .15s, box-shadow .15s, background .15s;
+}
+select:hover{ border-color:#35507b }
+select:focus-visible{ border-color:var(--accent); box-shadow:var(--ring); background:#0d1a30 }
+
+.table-host { margin-top:8px; }
+
+
+
+.dropdown {
+  position: relative;
+  display: inline-block;
+  margin-right: 8px;
+}
+.dropdown-content {
+  display: none;
+  position: absolute;
+  background: #0c1628;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  min-width: 160px;
+  z-index: 10;
+}
+.dropdown-content a {
+  color: #eaf1f8;
+  padding: 8px 12px;
+  text-decoration: none;
+  display: block;
+}
+.dropdown-content a:hover {
+  background: #162544;
+}
+.dropdown:hover .dropdown-content {
+  display: block;
+}
+
+
+#cfg_table table { width:100%; }
+#cfg_table thead th:first-child { width: 48%; }
+#cfg_table thead th:last-child  { width: 52%; }
+
+
+.error-banner{
+  margin-top:8px;
+  padding:10px 14px;
+  border-radius:var(--radius-xs);
+  background:rgba(220,53,69,0.1);
+  color:#f08a8a;
+  font-size:0.875rem;
+  border:1px solid rgba(220,53,69,0.4);
+}
+
+input[readonly]{
+  background:#0b1424; 
+  color:#c7d3e6;
+  cursor:not-allowed;
+}
+input[readonly]:focus-visible{
+  border-color:var(--line);
+  box-shadow:none;
+}
+
+input, select{
+  line-height:1.2;
+  min-height:44px;
+}
+
+.table-host{
+  max-height: clamp(160px, 32vh, 360px);
+  overflow:auto;
+}
+
+.table-host thead th{
+  text-transform: uppercase;
+  letter-spacing:.02em;
+}
+.table-host tbody td{
+  white-space: nowrap;       
+  text-overflow: ellipsis; 
+  overflow: hidden;
+}
+.balance-pos { color:#4ade80; }
+.balance-neg { color:#f87171; }   
+.balance-zero{ color:#94a3b8; }   
+
+#u_save{ white-space:nowrap }
+#u_refresh{ white-space:nowrap }
+
+
+
 button{
   background:linear-gradient(180deg,var(--accent),var(--accent-2));
   color:#fff; border:0; border-radius:var(--radius-xs);
@@ -1328,7 +1431,19 @@ tbody tr:nth-child(even){ background:rgba(255,255,255,.02) }
 tbody tr:hover{ background:#0f1a2b }
 
 #machines{ max-height:none; overflow:visible; padding:0; margin-top:6px; }
-#history{ max-height: clamp(220px, 42vh, 520px); overflow:auto; }
+#history_wrap{
+  max-height: clamp(240px, 40vh, 480px); /* yaklaşık 10 satır sığar */
+  overflow:auto;
+  border:1px solid var(--line);
+  border-radius:10px;
+  background:#0c1628;
+}
+#history{
+  width:100%;
+  border-collapse:separate; border-spacing:0;
+}
+#history thead th{ position:sticky; top:0; z-index:1; background:#0f1a2b; }
+
 #users, #csv{ max-height: clamp(120px, 32vh, 320px); overflow:auto; margin-top:6px; }
 
 *::-webkit-scrollbar{ height:10px; width:10px }
@@ -1342,9 +1457,12 @@ tbody tr:hover{ background:#0f1a2b }
   display:inline-block; padding:3px 8px; border-radius:999px; font-size:11px;
   background:#1b2742; color:#d6e9ff; border:1px solid #2b3c5a; white-space:nowrap;
 }
-.pill-ok{ background:#0f2f1d; border-color:#1e5b38; color:#b6f3c8 }
-.pill-idle{ background:#161e33; border-color:#2a3b5a; color:#cfe7ff }
-.pill-err{ background:#2a1414; border-color:#6e2525; color:#ffc1c1 }
+.pill-ok{ background:#0f2f1d; border-color:#1e5b38; color:#b6f3c8 }   /* Busy */
+.pill-idle{ background:#161e33; border-color:#2a3b5a; color:#cfe7ff }  /* Available */
+.pill-warn{ background:#2b1f13; border-color:#6b4e1e; color:#f8e0b3 }  /* Disabled */
+.pill-err{ background:#2a1414; border-color:#6e2525; color:#ffc1c1 }   /* Unknown/Error */
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+
 
 #machines table{ border-radius:10px; background:#0c1628 }
 #machines thead th{ padding:10px; font-size:12px }
@@ -1380,94 +1498,175 @@ a:hover{ text-decoration:underline }
 
     <div class="card">
       <h3>Machines</h3>
-      <div id="machines"></div>
-      <div class="muted" style="margin-top:8px;">Prices and default durations come from configuration.</div>
-      <button style="margin-top:8px;" onclick="refresh()">Refresh</button>
+      <div id="machines_table" class="table-host"></div>
     </div>
+
 
     <div class="card">
       <h3>Transaction History</h3>
-      <table id="history"><thead>
-        <tr><th>Time (UTC)</th><th>Tenant</th><th>Machine</th><th>Charged</th><th>Balance After</th><th>Minutes</th><th>Success</th></tr>
-      </thead><tbody></tbody></table>
+      <div id="history_wrap">
+  <table id="history">
+    <thead>
+      <tr>
+        <th>Time (NZ)</th>
+        <th>Tenant</th>
+        <th>Machine</th>
+        <th>Charged</th>
+        <th>Balance After</th>
+        <th>Minutes</th>
+        <th>Success</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
       <div class="muted">Showing last 50 entries</div>
     </div>
 
     <div class="card">
-      <h3>Add / Update User</h3>
-      <div class="row">
-        <div><label>tenant_code</label><input id="u_code" value="123456"/></div>
-        <div><label>name</label><input id="u_name" placeholder="Full name"/></div>
-      </div>
-      <div class="row">
-        <div><label>balance</label><input id="u_balance" value="100"/></div>
-        <div style="display:flex; align-items:end;"><button onclick="upsert()">Save</button></div>
-      </div>
-      <div style="margin-top:8px;">
-        <button onclick="listAccounts()">List Accounts</button>
-      </div>
-      <pre id="users">{{}}</pre>
-    </div>
+  <h3>Add / Update User</h3>
 
-    <div class="card">
-      <h3>Settings</h3>
-      <div class="row">
-        <div><label>Washing machines (comma)</label><input id="cfg_wm" placeholder="1,2,3"/></div>
-        <div><label>Dryer machines (comma)</label><input id="cfg_dm" placeholder="4,5,6"/></div>
-      </div>
-      <div class="row">
-        <div><label>Washing default minutes</label><input id="cfg_wmin" placeholder="30"/></div>
-        <div><label>Dryer default minutes</label><input id="cfg_dmin" placeholder="60"/></div>
-      </div>
-      <div class="row">
-        <div><label>Washing price</label><input id="cfg_wp" placeholder="5"/></div>
-        <div><label>Dryer price</label><input id="cfg_dp" placeholder="5"/></div>
-      </div>
-      <div class="row">
-        <div><label>Disabled machines (comma)</label><input id="cfg_disabled" placeholder="e.g. 2,5"/></div>
-        <div></div>
-      </div>
-      <div class="muted">Per-machine override via price_map in options.json</div>
-      <div style="margin-top:8px;">
-        <button onclick="loadConfig()">Load Config</button>
-        <button onclick="saveConfig()" style="margin-left:8px;">Save Config</button>
-      </div>
-      <pre id="cfg_out">{{}}</pre>
-    </div>
-
-    <div class="card">
-      <h3>Quick Charge</h3>
-      <div class="row">
-        <div><label>tenant_code</label><input id="c_tenant" value="123456"/></div>
-        <div><label>machine</label><input id="c_machine" value="1"/></div>
-      </div>
-      <div class="row">
-        <div><label>price (optional)</label><input id="c_price" placeholder="leave blank for category/price_map"/></div>
-        <div><label>minutes (optional)</label><input id="c_minutes" placeholder="leave blank for default minutes"/></div>
-      </div>
-      <div style="margin-top:8px;">
-        <button onclick="simulate()">Simulate/Charge</button>
-        <span class="muted">Honors simulate flag; DI used for availability</span>
-      </div>
-      <pre id="charge_out">{{}}</pre>
-    </div>
-
-    <div class="card">
-  <h3>CSV Files</h3>
+  <!-- user selector row -->
   <div class="row">
-    <div><button onclick="window.location='./download?file=accounts'">Download accounts.csv</button></div>
-    <div><button onclick="window.location='./download?file=transactions'">Download transactions.csv</button></div>
     <div>
-      <input type="file" id="uploadCsv" accept=".csv" style="display:none" onchange="uploadAuto()"/>
-      <button onclick="document.getElementById('uploadCsv').click()">Upload CSV</button>
+      <label>Select user</label>
+      <select id="u_select">
+        <option value="">New user</option>
+      </select>
+    </div>
+    <div style="display:flex; align-items:end; gap:8px;">
+      <button id="u_refresh" class="btn-secondary">Refresh users</button>
+      <button onclick="upsert()" id="u_save">Save</button>
     </div>
   </div>
-  <div style="margin-top:8px;">
-    <button onclick="cat('accounts','data')">Open accounts (data)</button>
-    <button onclick="cat('transactions','data')" style="margin-left:8px;">Open transactions (data)</button>
+
+  <!-- form fields -->
+  <div class="row">
+    <label>full_name</label><input id="u_name" placeholder="Full name"/>
+    <label>full_name</label><input id="u_name" placeholder="Full name"/>
   </div>
-  <pre id="csv">{{}}</pre>
+
+  <div class="row">
+    <label>current_balance</label><input id="u_balance_current" value="0" readonly/>
+    <label>top_up_amount</label><input id="u_topup" placeholder="e.g. 25"/>
+  </div>
+
+  <!-- legacy button kept (hidden) so nothing breaks -->
+  <div style="margin-top:8px;">
+    <button id="u_list_legacy" style="display:none" onclick="listAccounts()">List Accounts</button>
+  </div>
+
+  <!-- table placeholder -->
+  <div id="user_error" class="error-banner" style="display:none"></div>
+  <div id="user_table" class="table-host"></div>
+
+  <!-- legacy JSON output kept but hidden to avoid breaking anything -->
+  <pre id="users" style="display:none">{{}}</pre>
 </div>
+
+
+    <div class="card">
+  <h3>Settings</h3>
+
+  <!-- Machines -->
+  <div class="muted" style="margin:6px 0 -2px 2px;">Machines</div>
+  <div class="row">
+    <div><label>washing_machines (comma)</label><input id="cfg_wm" placeholder="1,2,3"/></div>
+    <div><label>dryer_machines (comma)</label><input id="cfg_dm" placeholder="4,5,6"/></div>
+  </div>
+
+  <!-- Durations -->
+  <div class="row">
+    <div><label>washing_minutes</label><input id="cfg_wmin" placeholder="30"/></div>
+    <div><label>dryer_minutes</label><input id="cfg_dmin" placeholder="60"/></div>
+  </div>
+
+  <!-- Pricing -->
+  <div class="row">
+    <div><label>price_washing</label><input id="cfg_wp" placeholder="5"/></div>
+    <div><label>price_dryer</label><input id="cfg_dp" placeholder="5"/></div>
+  </div>
+
+  <!-- Disabled -->
+  <div class="row">
+    <div><label>disabled_machines (comma)</label><input id="cfg_disabled" placeholder="e.g. 2,5"/></div>
+    <div></div>
+  </div>
+
+  <!-- Buttons -->
+  <div style="margin-top:8px;">
+    <button onclick="loadConfig()" class="btn-secondary">Load Settings</button>
+    <button onclick="saveConfig()" style="margin-left:8px;">Save Settings</button>
+  </div>
+
+  <!-- Compact table preview instead of raw JSON -->
+  <div id="cfg_table" class="table-host"></div>
+</div>
+
+
+    <div class="card">
+  <h3>Quick Charge</h3>
+
+  <div class="row">
+    <div>
+      <label>account_id</label>
+      <input id="qc_tenant" placeholder="123456"/>
+    </div>
+    <div>
+      <label>machine</label>
+      <select id="qc_machine">
+        <option value="">Select machine...</option>
+        <!-- JS ile doldurulacak -->
+      </select>
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>price (optional)</label>
+      <input id="qc_price" placeholder="leave blank for category/price_map"/>
+    </div>
+    <div>
+      <label>minutes (optional)</label>
+      <input id="qc_minutes" placeholder="leave blank for default minutes"/>
+    </div>
+  </div>
+
+  <div style="margin-top:8px;">
+    <button onclick="simulateCharge()">Simulate/Charge</button>
+  </div>
+
+  <div id="qc_table" class="table-host"></div>
+</div>
+
+
+    <div class="card">
+  <div class="card">
+  <h3>CSV Files</h3>
+
+  <div class="row">
+    <div class="dropdown">
+      <button>Download v</button>
+      <div class="dropdown-content">
+        <a href="./download_accounts">Accounts.csv</a>
+        <a href="./download_transactions">Transactions.csv</a>
+      </div>
+    </div>
+
+    <div class="dropdown">
+      <button>Open Data v</button>
+      <div class="dropdown-content">
+        <a href="#" onclick="openData('accounts')">Accounts</a>
+        <a href="#" onclick="openData('transactions')">Transactions</a>
+      </div>
+    </div>
+
+    <button onclick="uploadCsv()">Upload CSV</button>
+  </div>
+
+  <div id="csv_table" class="table-host"></div>
+</div>
+
 
 
   </div>
@@ -1482,104 +1681,649 @@ function pill2(state, err) {
   return `<span class="pill ${cls}">${txt}</span>`;
 }
 
+const MACHINE_DEADLINES = {};
+let machineCountdownInterval = null;
+
 async function renderMachines() {
-  const res = await fetch('./machines');
-  const js = await res.json();
-  const list = js.machines || [];
-  let html = '<table><thead><tr><th>ID</th><th>Category</th><th>Switch</th><th>Sensor</th><th>Status</th><th>Price</th><th>Default minutes</th></tr></thead><tbody>';
-  for (const m of list) {
-    html += `<tr>
-      <td>${m.id}</td>
-      <td>${m.category}</td>
-      <td>${m.ha_switch}</td>
-      <td>${m.ha_sensor}</td>
-      <td>${pill2(m.state, m.error)}</td>
-      <td>${m.price}</td>
-      <td>${m.default_minutes}</td>
-    </tr>`;
+  const host = document.getElementById('machines_table');
+  if (!host) return;
+  try {
+    const res = await fetch('./machines');
+    const js = await res.json();
+    const items = (js && js.machines) ? js.machines : [];
+
+    const rows = items.map(m => {
+      const machineName =
+        (m.category === 'washing' ? 'Washing' : 'Dryer') + ' - Machine ' + m.id;
+
+      const status =
+        m.state === 'on'       ? 'Busy' :
+        m.state === 'off'      ? 'Available' :
+        m.state === 'disabled' ? 'Disabled' : 'Unknown';
+
+      const color =
+        status === 'Busy'      ? '#22c55e' :
+        status === 'Available' ? '#3b82f6' :
+        status === 'Disabled'  ? '#f59e0b' : '#94a3b8';
+
+      // Remaining sadece elimizde deadline varsa
+      const deadline = MACHINE_DEADLINES[m.id] || 0;
+      const remainingCell = `<td data-mid="${m.id}" data-deadline="${deadline || ''}"></td>`;
+
+      return `
+        <tr>
+          <td>${machineName}</td>
+          <td style="color:${color}">${status}</td>
+          ${remainingCell}
+        </tr>`;
+    }).join('');
+
+    host.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>Machine</th>
+            <th>Status</th>
+            <th>Remaining</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+
+    startMachineTicker(); // Remaining hücrelerini her saniye günceller
+  } catch (e) {
+    host.innerHTML = `<div class="error-banner">Failed to load machines.</div>`;
   }
-  html += '</tbody></table>';
-  document.getElementById('machines').innerHTML = html;
 }
+
+function startMachineTicker() {
+  if (machineCountdownInterval) return;
+  machineCountdownInterval = setInterval(() => {
+    const now = Date.now();
+    document.querySelectorAll('#machines_table td[data-mid]').forEach(td => {
+      const raw = td.getAttribute('data-deadline');
+      const deadline = raw ? parseInt(raw, 10) : 0;
+      if (!deadline) { td.textContent = ''; return; }
+
+      const ms = deadline - now;
+      if (ms <= 0) { td.textContent = ''; td.removeAttribute('data-deadline'); return; }
+
+      const total = Math.ceil(ms / 1000);
+      const m = Math.floor(total / 60);
+      const s = String(total % 60).padStart(2, '0');
+      td.textContent = `${m}:${s}`;
+    });
+  }, 1000);
+}
+
+function statusPill(status) {
+  // status: "Busy" | "Available" | "Disabled" | "Unknown"
+  const map = {
+    "Busy":      { cls: "pill-ok",   txt: "Busy" },
+    "Available": { cls: "pill-idle", txt: "Available" },
+    "Disabled":  { cls: "pill-warn", txt: "Disabled" },
+    "Unknown":   { cls: "pill-err",  txt: "Unknown" }
+  };
+  const conf = map[status] || map["Unknown"];
+  return `<span class="pill ${conf.cls}">${conf.txt}</span>`;
+}
+
 
 async function renderHistory() {
-  const res = await fetch('./history?limit=50');
-  const js = await res.json();
+  const wrap = document.getElementById('history_wrap');
   const tbody = document.querySelector('#history tbody');
-  tbody.innerHTML = '';
-  for (const r of (js.items || [])) {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${r.timestamp}</td>
-      <td>${r.tenant_code}</td>
-      <td>${r.machine_number}</td>
-      <td>${r.amount_charged}</td>
-      <td>${r.balance_after}</td>
-      <td>${r.cycle_minutes}</td>
-      <td>${r.success}</td>`;
-    tbody.appendChild(tr);
+  if (!tbody) return;
+
+  try {
+    // Son 100 işlemi çek
+    const res = await fetch('./history?limit=100');
+    const js = await res.json();
+
+    const fmt = new Intl.DateTimeFormat("en-NZ", {
+      dateStyle: "short",
+      timeStyle: "short",
+      timeZone: "Pacific/Auckland"
+    });
+
+    const rows = (js.items || []).map(r => {
+      const t = r.timestamp ? fmt.format(new Date(r.timestamp)) : "";
+      const ok = (String(r.success).toLowerCase() === 'true');
+      const pill = ok
+        ? '<span class="pill pill-ok">True</span>'
+        : '<span class="pill pill-err">False</span>';
+
+      return `
+        <tr>
+          <td>${t}</td>
+          <td>${r.tenant_code || ''}</td>
+          <td>${r.machine_number || ''}</td>
+          <td>${r.amount_charged || ''}</td>
+          <td>${r.balance_after || ''}</td>
+          <td>${r.cycle_minutes || ''}</td>
+          <td>${pill}</td>
+        </tr>`;
+    }).join('');
+
+    tbody.innerHTML = rows;
+
+    if (wrap) wrap.scrollTop = 0; // en yeni başta görünsün
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="7"><div class="error-banner">Failed to load history.</div></td></tr>`;
   }
 }
 
-async function upsert() {
-  const body = {
-    tenant_code: document.getElementById('u_code').value.trim(),
-    name: document.getElementById('u_name').value.trim(),
-    balance: parseFloat(document.getElementById('u_balance').value.trim()||'0')
-  };
-  const res = await fetch('./accounts/upsert', { method:'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
-  const js = await res.json();
-  document.getElementById('users').textContent = JSON.stringify(js, null, 2);
+
+// ------- Settings table renderer -------
+function _csvJoin(arr) {
+  if (!Array.isArray(arr)) return '';
+  return arr.join(',');
+}
+function _normalizeList(v) {
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string') {
+    return v.split(',').map(s=>s.trim()).filter(Boolean);
+  }
+  return [];
+}
+function buildSettingsKV(settings){
+  return [
+    ['washing_machines', _csvJoin(settings.washing_machines ?? [])],
+    ['dryer_machines', _csvJoin(settings.dryer_machines ?? [])],
+    ['washing_minutes', String(settings.washing_minutes ?? '')],
+    ['dryer_minutes',   String(settings.dryer_minutes ?? '')],
+    ['price_washing',   String(settings.price_washing ?? '')],
+    ['price_dryer',     String(settings.price_dryer ?? '')],
+    ['disabled_machines', _csvJoin(settings.disabled_machines ?? [])],
+  ];
+}
+function renderSettingsTable(settings){
+  const host = document.getElementById('cfg_table');
+  if (!host) return;
+  const rows = buildSettingsKV(settings || {});
+  const trs = rows.map(([k,v]) => `
+    <tr>
+      <td>${k}</td>
+      <td>${(v === '' || v == null) ? '[empty]' : v}</td>
+    </tr>
+  `).join('');
+  host.innerHTML = `
+    <table>
+      <thead>
+        <tr><th>key</th><th>value</th></tr>
+      </thead>
+      <tbody>
+        ${trs}
+      </tbody>
+    </table>
+  `;
 }
 
-async function listAccounts() {
+function populateQuickChargeMachines(cfg) {
+  const sel = document.getElementById('qc_machine');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">Select machine...</option>';
+
+  (cfg.washing_machines || []).forEach(m => {
+    const opt = document.createElement('option');
+    opt.value = String(m);
+    opt.textContent = `Washing - Machine ${m}`;
+    sel.appendChild(opt);
+  });
+  (cfg.dryer_machines || []).forEach(m => {
+    const opt = document.createElement('option');
+    opt.value = String(m); 
+    opt.textContent = `Dryer - Machine ${m}`;
+    sel.appendChild(opt);
+  });
+}
+
+function renderQuickChargeResult(res) {
+  const host = document.getElementById('qc_table');
+  if (!host) return;
+
+  // Hata durumu
+  if (!res || !res.ok) {
+    host.innerHTML = `<div class="error-banner">Charge failed.</div>`;
+    return;
+  }
+
+  const row = `
+    <tr>
+      <td>${res.account_id || ''}</td>
+      <td>${res.name || ''}</td>
+      <td>${res.machine || ''}</td>
+      <td style="color:${res.status === 'OK' ? '#4ade80' : '#f87171'}">
+        ${res.status}
+      </td>
+    </tr>
+  `;
+
+  host.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>account_id</th>
+          <th>name</th>
+          <th>selected_machine</th>
+          <th>status</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${row}
+      </tbody>
+    </table>
+  `;
+}
+
+
+
+
+// --- formatting & validation helpers ---
+function formatMoney(v) {
+  const n = Number(v);
+  if (!isFinite(n)) return "0.00";
+  return n.toFixed(2);
+}
+
+function parseNonNegativeFloat(txt, fallback=0) {
+  const n = parseFloat(String(txt || "").replace(",", "."));
+  if (!isFinite(n) || n < 0) return fallback;
+  return n;
+}
+
+function isSixDigitCode(v) {
+  return /^[0-9]{6}$/.test(String(v || "").trim());
+}
+
+function showUserError(msg){
+  const box = document.getElementById('user_error');
+  if(!box) return;
+  if(!msg){
+    box.style.display='none';
+    box.textContent='';
+    return;
+  }
+  box.textContent=msg;
+  box.style.display='block';
+}
+
+
+let USERS_CACHE = {};
+
+async function fetchAccounts() {
   const res = await fetch('./accounts/list');
   const js = await res.json();
-  document.getElementById('users').textContent = JSON.stringify(js, null, 2);
+  USERS_CACHE = js.accounts || {};
+  return USERS_CACHE;
 }
+
+function sortedUserEntries() {
+  return Object.entries(USERS_CACHE).sort((a,b)=> a[0].localeCompare(b[0]));
+}
+
+function populateUserSelect(selectedCode="") {
+  const sel = document.getElementById('u_select');
+  if (!sel) return;
+  sel.innerHTML = '';
+  const optNew = document.createElement('option');
+  optNew.value = '';
+  optNew.textContent = 'New user';
+  sel.appendChild(optNew);
+  for (const [code, rec] of sortedUserEntries()) {
+    const o = document.createElement('option');
+    o.value = code;
+    const nm = (rec.name || '').trim();
+    o.textContent = nm ? `${code} — ${nm}` : `${code}`;
+    if (code === selectedCode) o.selected = true;
+    sel.appendChild(o);
+  }
+}
+
+function clearFormForNew() {
+  const codeEl = document.getElementById('u_code');
+  codeEl.value = '';
+  codeEl.readOnly = false;
+  codeEl.placeholder = '6-digit account id';
+
+  const nameEl = document.getElementById('u_name');
+  nameEl.value = '';
+  nameEl.placeholder = 'Full name';
+
+  document.getElementById('u_balance_current').value = formatMoney(0);
+
+  const topupEl = document.getElementById('u_topup');
+  topupEl.value = '';
+  topupEl.placeholder = 'initial balance (e.g. 25)';
+
+  renderUserTable(null);
+}
+
+
+function fillFormFromCode(code) {
+  const rec = USERS_CACHE[code];
+  if (!rec) { clearFormForNew(); return; }
+
+  document.getElementById('u_code').value = code;
+  document.getElementById('u_code').readOnly = true;
+
+  document.getElementById('u_name').value = rec.name || '';
+  document.getElementById('u_balance_current').value = formatMoney(rec.balance ?? 0);
+
+  // top-up alanını boş bırak, kullanıcı kendisi girsin
+  document.getElementById('u_topup').value = '';
+  document.getElementById('u_topup').placeholder = 'e.g. 25';
+
+  renderUserTable({tenant_code: code, ...rec});
+}
+
+
+function renderUserTable(rec) {
+  const host = document.getElementById('user_table');
+  if (!host) return;
+  if (!rec) { host.innerHTML = ''; return; }
+
+  const last = rec.last_transaction_utc || '';
+  const bal = formatMoney(rec.balance ?? 0);
+  let balClass = 'balance-zero';
+  if ((rec.balance ?? 0) > 0) balClass = 'balance-pos';
+  if ((rec.balance ?? 0) < 0) balClass = 'balance-neg';
+
+  host.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>account_id</th>
+          <th>name</th>
+          <th>balance</th>
+          <th>last_transaction_utc</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>${rec.tenant_code}</td>
+          <td>${rec.name || ''}</td>
+          <td class="${balClass}">${bal}</td>
+          <td>${last}</td>
+        </tr>
+      </tbody>
+    </table>
+  `;
+}
+
+
+
+async function initUsersUI() {
+  await fetchAccounts();
+  populateUserSelect();
+  document.getElementById('u_select').addEventListener('change', (e)=>{
+    const code = e.target.value;
+    if (!code) clearFormForNew(); else fillFormFromCode(code);
+  });
+  document.getElementById('u_refresh').addEventListener('click', async ()=>{
+    await fetchAccounts();
+    const current = document.getElementById('u_select').value;
+    populateUserSelect(current);
+    if (current) fillFormFromCode(current); else clearFormForNew();
+  });
+  // initial: New user
+  clearFormForNew();
+}
+
+aasync function upsert() {
+  const selCode = document.getElementById('u_select').value;
+  const codeEl = document.getElementById('u_code');
+  const nameEl = document.getElementById('u_name');
+  const balCurEl = document.getElementById('u_balance_current');
+  const topupEl = document.getElementById('u_topup');
+
+  const code = (codeEl.value || '').trim();
+  const name = (nameEl.value || '').trim();
+  const current = parseNonNegativeFloat(balCurEl.value, 0);
+  const topup = parseNonNegativeFloat(topupEl.value, 0);
+
+  // basic validations
+  if (!selCode) {
+    // new user: require 6-digit id
+    if (!isSixDigitCode(code)) {
+      alert('Please enter a valid 6-digit account_id.');
+      codeEl.focus();
+      return;
+    }
+    if (!name) {
+      alert('Please enter a name.');
+      nameEl.focus();
+      return;
+    }
+  } else {
+    // existing user: no negative top-up
+    if (topup < 0) {
+      alert('Top-up amount cannot be negative.');
+      topupEl.focus();
+      return;
+    }
+  }
+
+  let newBalance = current;
+  if (selCode) {
+    // Existing user → add top_up_amount to current_balance
+    newBalance = current + topup;
+  } else {
+    // New user → initial balance = top_up_amount
+    newBalance = topup;
+  }
+
+  const body = { tenant_code: code, name, balance: newBalance };
+  const res = await fetch('./accounts/upsert', {
+    method:'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(body)
+  });
+  const js = await res.json();
+
+  if (!res.ok || !js.ok) {
+    alert('Save failed.');
+    return;
+  }
+  showUserError(null);
+
+  // Refresh UI (and keep selection)
+  await fetchAccounts();
+  populateUserSelect(code);
+  fillFormFromCode(code);
+}
+
+
+
+async function listAccounts() {
+  await fetchAccounts();
+  const sel = document.getElementById('u_select').value;
+  if (sel) fillFormFromCode(sel);
+}
+
 
 async function loadConfig() {
   const res = await fetch('./config');
   const js = await res.json();
-  document.getElementById('cfg_out').textContent = JSON.stringify(js, null, 2);
-  document.getElementById('cfg_wm').value = (js.washing_machines||[]).join(',');
-  document.getElementById('cfg_dm').value = (js.dryer_machines||[]).join(',');
-  document.getElementById('cfg_wmin').value = js.washing_minutes||30;
-  document.getElementById('cfg_dmin').value = js.dryer_minutes||60;
-  document.getElementById('cfg_wp').value = js.price_washing||5;
-  document.getElementById('cfg_dp').value = js.price_dryer||5;
-  document.getElementById('cfg_disabled').value = (js.disabled_machines||[]).join(',');
+
+  // populate inputs
+  document.getElementById('cfg_wm').value  = (js.washing_machines || []).join(',');
+  document.getElementById('cfg_dm').value  = (js.dryer_machines  || []).join(',');
+  document.getElementById('cfg_wmin').value = js.washing_minutes ?? 30;
+  document.getElementById('cfg_dmin').value = js.dryer_minutes   ?? 60;
+  document.getElementById('cfg_wp').value   = js.price_washing   ?? 5;
+  document.getElementById('cfg_dp').value   = js.price_dryer     ?? 5;
+  document.getElementById('cfg_disabled').value = (js.disabled_machines || []).join(',');
+
+  // render compact table (no raw JSON)
+  renderSettingsTable(js);
+
+  // populate Quick Charge machines combobox
+  populateQuickChargeMachines(js);
 }
+
+
 
 async function saveConfig() {
   const wm = document.getElementById('cfg_wm').value.split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n));
   const dm = document.getElementById('cfg_dm').value.split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n));
-  const body = {
-    washing_machines: wm, dryer_machines: dm,
-    washing_minutes: parseInt(document.getElementById('cfg_wmin').value||'30'),
-    dryer_minutes: parseInt(document.getElementById('cfg_dmin').value||'60'),
-    price_washing: parseFloat(document.getElementById('cfg_wp').value||'5'),
-    price_dryer: parseFloat(document.getElementById('cfg_dp').value||'5'),
-    disabled_machines: document.getElementById('cfg_disabled').value.split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n))
+
+  const payload = {
+    washing_machines: wm,
+    dryer_machines: dm,
+    washing_minutes: parseInt(document.getElementById('cfg_wmin').value || '30'),
+    dryer_minutes:   parseInt(document.getElementById('cfg_dmin').value || '60'),
+    price_washing:   parseFloat(document.getElementById('cfg_wp').value || '5'),
+    price_dryer:     parseFloat(document.getElementById('cfg_dp').value || '5'),
+    disabled_machines: document.getElementById('cfg_disabled').value.split(',')
+      .map(s=>parseInt(s.trim())).filter(n=>!isNaN(n))
   };
-  const res = await fetch('./config', { method:'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+
+  const res = await fetch('./config', {
+    method:'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
+  });
   const js = await res.json();
-  document.getElementById('cfg_out').textContent = JSON.stringify(js, null, 2);
-  await renderMachines();
+
+  // After save, re-load to normalize and render the table
+  await loadConfig();
 }
 
-async function simulate() {
-  const t = document.getElementById('c_tenant').value.trim();
-  const m = document.getElementById('c_machine').value.trim();
-  const p = document.getElementById('c_price').value.trim();
-  const mins = document.getElementById('c_minutes').value.trim();
-  const params = new URLSearchParams({ tenant_code: t, machine: m });
-  if (p) params.set('price', p);
-  if (mins) params.set('minutes', mins);
-  const res = await fetch('./simulate/charge?' + params.toString());
-  const txt = await res.text();
-  document.getElementById('charge_out').textContent = txt;
-  await renderHistory();
+
+async function simulateCharge() {
+  const payload = {
+    tenant_code: document.getElementById('qc_tenant').value,
+    machine: document.getElementById('qc_machine').value,
+    price: document.getElementById('qc_price').value || null,
+    minutes: document.getElementById('qc_minutes').value || null,
+  };
+
+  const res = await fetch('./quick_charge', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  const js = await res.json();
+
+  // tabloya sonucu bas
+  renderQuickChargeResult(js);
+  
+  if (js && js.ok) {
+  const mid = String(document.getElementById('qc_machine').value).trim();
+  const mins =
+    (typeof js.cycle_minutes === 'number' ? js.cycle_minutes : null) ??
+    parseInt(document.getElementById('qc_minutes').value || '0', 10) || 0;
+
+  if (mid) {
+    MACHINE_DEADLINES[mid] = Date.now() + mins * 60 * 1000;
+    renderMachines(); // tabloyu tazeleyelim
+  }
 }
+
+  
+}
+
+function renderCsvTable(data) {
+  const host = document.getElementById('csv_table');
+  if (!host) return;
+
+  if (!data || !data.length) {
+    host.innerHTML = `<div class="error-banner">No data found.</div>`;
+    return;
+  }
+
+  const rows = data.map(acc => {
+    const date = acc.last_transaction_utc
+      ? new Intl.DateTimeFormat("en-NZ", {
+          dateStyle: "short",
+          timeStyle: "short"
+        }).format(new Date(acc.last_transaction_utc))
+      : "";
+    return `
+      <tr>
+        <td>${acc.account_id || ''}</td>
+        <td>${acc.name || ''}</td>
+        <td>${acc.balance ?? ''}</td>
+        <td>${date}</td>
+      </tr>`;
+  }).join("");
+
+  host.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>account_id</th>
+          <th>name</th>
+          <th>balance</th>
+          <th>last_transaction</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+async function openData(type) {
+  const res = await fetch(`./open_${type}`);
+  const js = await res.json();
+  renderCsvTable(js.data || []);
+}
+
+function renderMachines(machines) {
+  const host = document.getElementById('machines_table');
+  if (!host) return;
+
+  if (!machines || !machines.length) {
+    host.innerHTML = `<div class="error-banner">No machines found.</div>`;
+    return;
+  }
+
+  const rows = machines.map(m => {
+    const machineName = `${m.category === 'washing' ? 'Washing' : 'Dryer'} - Machine ${m.id}`;
+
+    // status stringini üret
+    const status =
+      m.state === 'on'       ? 'Busy' :
+      m.state === 'off'      ? 'Available' :
+      m.state === 'disabled' ? 'Disabled' : 'Unknown';
+
+    // pill badge HTML’i
+    const statusCell = statusPill(status);
+
+    // remaining time (only if busy)
+    let remaining = '';
+    if (status === 'Busy' && m.remaining_seconds) {
+      const mins = Math.floor(m.remaining_seconds / 60);
+      const secs = (m.remaining_seconds % 60).toString().padStart(2, '0');
+      remaining = `${mins}:${secs}`;
+    }
+
+    return `
+      <tr>
+        <td>${machineName}</td>
+        <td>${statusCell}</td>
+        <td class="mono">${remaining}</td>
+      </tr>`;
+  }).join("");
+
+  host.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>Machine</th>
+          <th>Status</th>
+          <th>Remaining</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+
+
 
 async function cat(file, where) {
   const res = await fetch(`./debug/cat?file=${file}&where=${where}`);
@@ -1622,6 +2366,7 @@ async function uploadAuto() {
 
 async function refresh() { await renderMachines(); await renderHistory(); }
 refresh(); loadConfig();
+initUsersUI();
 </script>
 </body>
 </html>
@@ -1644,6 +2389,14 @@ def machines():
             return time.time() < float(ACTIVE_UNTIL.get(mid, 0))
         except Exception:
             return False
+
+    # NEW: remaining seconds helper
+    def _remaining_seconds(mid: str) -> int:
+        try:
+            rem = int(float(ACTIVE_UNTIL.get(mid, 0)) - time.time())
+            return rem if rem > 0 else 0
+        except Exception:
+            return 0
 
     for mid in sorted(ids, key=lambda s: int(s)):
         switch, sensor = _machine_entities(mid, opts)
@@ -1731,7 +2484,8 @@ def machines():
             "busy_source": busy_source,     # "di"/"timer"/"ha"/"none"/"unknown" (diagnostics)
             "price": try_price,
             "default_minutes": _default_minutes_for(mid, opts),
-            "error": err
+            "error": err,
+            "remaining_seconds": _remaining_seconds(mid)  # NEW
         })
 
     return {"ok": True, "machines": out, "simulate": bool(opts.get("simulate", False))}
