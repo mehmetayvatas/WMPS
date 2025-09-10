@@ -353,25 +353,22 @@ def append_transaction(
     _mirror(TRANSACTIONS_PATH, SHARE_TX)
     _log("INFO", f"TX appended: {row}")
 
-def tail_transactions(n: int = 50) -> List[Dict[str,str]]:
+def tail_transactions(n: int = 50) -> List[Dict[str, str]]:
     if not TRANSACTIONS_PATH.exists():
         return []
-    lines = TRANSACTIONS_PATH.read_text(encoding="utf-8").splitlines()
-    if len(lines) <= 1: return []
-    header = lines[0].split(",")
-    body = lines[1:][-n:]
+    with TRANSACTIONS_PATH.open("r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)[-n:]  # sadece son n kayıt
     out = []
-    for ln in body:
-        parts = ln.split(",")
-        if len(parts) < len(header): continue
+    for row in rows:
         out.append({
-            "timestamp": parts[0],
-            "tenant_code": parts[1],
-            "machine_number": parts[2],
-            "amount_charged": parts[3],
-            "balance_after": parts[5],
-            "cycle_minutes": parts[6] if len(parts) > 6 else "",
-            "success": parts[7] if len(parts) > 7 else ""
+            "timestamp": row.get("timestamp", ""),
+            "tenant_code": row.get("tenant_code", ""),
+            "machine_number": row.get("machine_number", ""),
+            "amount_charged": row.get("amount_charged", ""),
+            "balance_after": row.get("balance_after", ""),
+            "cycle_minutes": row.get("cycle_minutes", ""),
+            "success": row.get("success", ""),
         })
     return out
 
@@ -496,7 +493,10 @@ def _adam_pulse(coil_index: int, pulse_seconds: float, opts: dict) -> bool:
     if not _adam_write_coil(coil_index, True, opts):
         return False
     time.sleep(max(0.05, float(pulse_seconds)))
-    _adam_write_coil(coil_index, False, opts)
+    off_ok = _adam_write_coil(coil_index, False, opts)
+    if not off_ok:
+        _log("WARN", f"ADAM: failed to release coil (index={coil_index}) after pulse")
+        return False
     return True
 
 # ----------------------- Availability & Operation --------
@@ -534,33 +534,64 @@ def machine_enabled(mid: str, opts: dict) -> bool:
     return True
 
 def machine_is_available(mid: str, opts: dict) -> bool:
-    """Prefer ADAM DI if configured; else HA sensor; else simulated/unknown."""
+    """Check machine availability.
+    Priority:
+      1. ADAM DI if configured
+      2. HA sensor
+      3. Simulated mode
+    Rules:
+      - DI True  => BUSY
+      - DI False => AVAILABLE (clear soft timer)
+      - HA 'on'  => BUSY
+      - HA 'off'/'idle' => AVAILABLE (clear soft timer)
+      - 'unknown' => treated as busy unless simulate=True
+      - No token (simulate=False) => not available
+    """
     if not machine_enabled(mid, opts):
         return False
 
-    # ADAM DI path
-    r, di = _machine_adam_mapping(mid, opts)
-    if ((opts.get("adam_host") or "").strip()) and di is not None:
-        di_state = _adam_read_di(di, opts)
-        if di_state is not None:
-            # DI True => RUNNING/BUSY (active). Available when False.
-            return not di_state
+    mid_s = str(mid)
 
-    # HA sensor path
-    switch, sensor = _machine_entities(mid, opts)
-    if bool(opts.get("simulate", False)) or not opts.get("ha_token"):
-        return True
+    # --- ADAM DI path ---
+    r, di = _machine_adam_mapping(mid_s, opts)
+    if (opts.get("adam_host") or "").strip() and di is not None:
+        di_state = _adam_read_di(di, opts)  # True = RUNNING/BUSY
+        if di_state is True:
+            return False
+        if di_state is False:
+            # OFF confirmed -> clear soft-busy timer
+            try:
+                ACTIVE_UNTIL.pop(mid_s, None)
+            except Exception:
+                pass
+            return True
+        # None -> unknown, fall back to HA
+
+    # --- Simulated/test mode ---
+    simulate = bool(opts.get("simulate", False))
+    token = _resolve_token(opts.get("ha_token"))
+
+    if not simulate and not token:
+        return False
+
+    # --- HA sensor path ---
+    _switch, sensor = _machine_entities(mid_s, opts)
     state = _get_state(sensor, opts)
-    # DI semantics: 'on' => BUSY, 'off' => AVAILABLE
-    return state in ("off", "false", "0", "idle", "unknown")
 
-def operate_machine(mid: str, minutes: Optional[int]) -> bool:
-    """
-    Returns True only if activation is *confirmed* in the real world.
-    - Simülasyon açıkken her zaman False döner (başarılı sayılmaz).
-    - ADAM için: DI varsa DI==True ile, DI yoksa HA sensörü 'on' ile teyit gerekir.
-    - HA için: zaten sensör 'on' teyidi var.
-    """
+    if state in ("off", "false", "0", "idle"):
+        try:
+            ACTIVE_UNTIL.pop(mid_s, None)
+        except Exception:
+            pass
+        return True
+
+    if state in ("on", "true", "1", "running"):
+        return False
+
+    # For 'unknown' or unexpected states:
+    return True if simulate else False
+
+def operate_machine(mid: str, minutes: Optional[int]) -> dict:
     opts = _read_options()
     simulate = bool(opts.get("simulate", False))
     url = opts.get("ha_url") or "http://supervisor/core"
@@ -573,10 +604,11 @@ def operate_machine(mid: str, minutes: Optional[int]) -> bool:
     except Exception:
         confirm_timeout = 8
 
-    # ---- SIMULATION: Gerçek teyit yok => asla başarı sayma
+    # ---- SIMULATION: test ortamı
     if simulate:
-        _log("INFO", f"[SIMULATE] (no real start) would turn ON {switch} for {minutes} minutes")
-        return False
+        _log("INFO", f"[SIMULATE] would turn ON {switch} for {minutes} minutes")
+        # Test ortamı istisnası: confirmed=True say
+        return {"ok": True, "confirmed": True}
 
     # ---- ADAM path
     if ((opts.get("adam_host") or "").strip()) and r is not None:
@@ -589,12 +621,10 @@ def operate_machine(mid: str, minutes: Optional[int]) -> bool:
         ok = _adam_pulse(r, pulse_seconds, opts) if do_mode == "pulse" else _adam_write_coil(r, True, opts)
         if not ok:
             _log("WARN", f"ADAM: failed to activate relay for machine {mid}")
-            return False
+            return {"ok": False, "confirmed": False}
 
-        # --- SIKI TEYİT: önce DI, DI yoksa HA sensör
         t0 = time.monotonic()
         confirmed = False
-
         while time.monotonic() - t0 < confirm_timeout:
             if di is not None:
                 di_state = _adam_read_di(di, opts)  # True => RUNNING
@@ -602,7 +632,6 @@ def operate_machine(mid: str, minutes: Optional[int]) -> bool:
                     confirmed = True
                     break
             else:
-                # DI yoksa HA sensör 'on' görmeyi dene
                 if token:
                     st = _get_state(sensor, opts)
                     if st in ("on", "true", "1", "running"):
@@ -614,9 +643,8 @@ def operate_machine(mid: str, minutes: Optional[int]) -> bool:
             _log("WARN", f"Activation not confirmed (ADAM). mid={mid} di={di} sensor={sensor}")
             if do_mode == "hold":
                 _adam_write_coil(r, False, opts)
-            return False
+            return {"ok": False, "confirmed": False}
 
-        # hold modunda süre sonunda off planı (mevcut davranış)
         if do_mode == "hold" and minutes and minutes > 0:
             def turn_off_later():
                 try:
@@ -628,37 +656,36 @@ def operate_machine(mid: str, minutes: Optional[int]) -> bool:
             t.daemon = True
             t.start()
 
-        return True
+        return {"ok": True, "confirmed": True}
 
-    # ---- HA path (zaten sensörden teyit ediyor)
+    # ---- HA path
     if not token:
         _log("WARN", "ha_token missing; cannot control HA.")
-        return False
+        return {"ok": False, "confirmed": False}
 
     try:
         _log("INFO", f"Turning ON {switch}")
         _ha_call_service(url, token, "switch", "turn_on", {"entity_id": switch})
     except Exception as e:
         _log("WARN", f"Failed to turn ON {switch}: {e}")
-        return False
+        return {"ok": False, "confirmed": False}
 
-    # Confirm via HA sensor
     t0 = time.monotonic()
-    ok = False
+    confirmed = False
     while time.monotonic() - t0 < confirm_timeout:
         st = _get_state(sensor, opts)
         if st in ("on", "true", "1", "running"):
-            ok = True
+            confirmed = True
             break
         time.sleep(0.5)
 
-    if not ok:
+    if not confirmed:
         _log("WARN", f"Activation not confirmed by {sensor}")
         try:
             _ha_call_service(url, token, "switch", "turn_off", {"entity_id": switch})
         except Exception:
             pass
-        return False
+        return {"ok": False, "confirmed": False}
 
     if minutes and minutes > 0:
         def turn_off_later():
@@ -671,7 +698,8 @@ def operate_machine(mid: str, minutes: Optional[int]) -> bool:
         t.daemon = True
         t.start()
 
-    return True
+    return {"ok": True, "confirmed": True}
+
 
 def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minutes: Optional[int], opts: dict) -> dict:
     """
@@ -715,6 +743,8 @@ def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minut
             append_transaction(tenant_code, machine, 0.0, bal_before, bal_before, m, success=False)
             raise HTTPException(status_code=402, detail="INSUFFICIENT_FUNDS")
 
+    simulate = bool(opts.get("simulate", False))
+
     # Per-machine lock, then operate
     with file_lock(_machine_lock_path(machine), timeout=10.0):
         if not machine_is_available(machine, opts):
@@ -722,20 +752,24 @@ def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minut
             raise HTTPException(status_code=409, detail="MACHINE_BUSY")
 
         activated = operate_machine(machine, m)
-        if not activated:
+        ok = bool(activated and activated.get("ok"))
+
+        if not ok and not simulate:
             with file_lock(GLOBAL_LOCK, timeout=10.0):
                 accounts = read_accounts()
                 bal0 = float(accounts.get(tenant_code, {}).get("balance", 0.0))
                 append_transaction(tenant_code, machine, 0.0, bal0, bal0, m, success=False)
             raise HTTPException(status_code=500, detail="ACTIVATION_FAILED")
 
-        # Soft-busy timer + hold için auto-release ----
         duration_s = int(m or 0) * 60
         if duration_s > 0:
             ACTIVE_UNTIL[machine] = time.time() + duration_s
 
             mode = str(opts.get("do_mode") or "pulse").lower()
-            if mode == "hold":
+            adam_enabled = bool((opts.get("adam_host") or "").strip())
+
+            # Only schedule HA-based auto-release for HA path (not ADAM hold)
+            if mode == "hold" and not adam_enabled:
                 def _auto_release():
                     try:
                         url = opts.get("ha_url") or "http://supervisor/core"
@@ -780,10 +814,16 @@ def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minut
             bal_after = bal_before - p
             accounts[tenant_code]["balance"] = bal_after
             accounts[tenant_code]["last_transaction_utc"] = datetime.now(timezone.utc).isoformat()
-            append_transaction(tenant_code, machine, p, bal_before, bal_after, m, success=True)
+
+            # success True yalnızca: activated (gerçek teyit) veya test modu (simulate=True) ise
+            success_ok = bool(ok or simulate)
+            append_transaction(tenant_code, machine, p, bal_before, bal_after, m, success=success_ok)
+
             write_accounts(accounts)
 
-    speak(f"Machine {machine} started for {m} minutes.")
+    if ok or simulate:
+        speak(f"Machine {machine} started for {m} minutes.")
+
     return {
         "ok": True,
         "tenant_code": tenant_code,
@@ -792,8 +832,9 @@ def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minut
         "charged": p,
         "machine": machine,
         "cycle_minutes": m,
-        "message": "CHARGE_OK"
+        "message": "CHARGE_OK" if (ok or simulate) else "CHARGE_PENDING"
     }
+
 
 # ----------------------- Keypad (EVDEV + HA WS) ----------
 # Minimal state machine: 6-digit code, then machine 1..6, then confirm
@@ -990,7 +1031,6 @@ def _evdev_thread():
 
         try:
             for event in dev.read_loop():
-                # EV_KEY only; value 1 == key down (press). İstersen tekrarları da görmek için (1,2) yapabilirsin.
                 if event.type != ecodes.EV_KEY or getattr(event, "value", None) != 1:
                     continue
 
@@ -1208,7 +1248,7 @@ def ping():
 def debug_tts(msg: str = "Hello from WMPS"):
     """
     Quick TTS test endpoint.
-    Example: /debug/tts?msg=Merhaba+Memo
+    Example: /debug/tts?msg=Hello+Guys
     """
     try:
         speak(msg)
@@ -1542,8 +1582,8 @@ a:hover{ text-decoration:underline }
 
   <!-- form fields -->
   <div class="row">
-    <label>full_name</label><input id="u_name" placeholder="Full name"/>
-    <label>full_name</label><input id="u_name" placeholder="Full name"/>
+      <label>account_id</label><input id="u_code" placeholder="6-digit account id"/>
+      <label>full_name</label><input id="u_name" placeholder="Full name"/>
   </div>
 
   <div class="row">
@@ -1616,7 +1656,6 @@ a:hover{ text-decoration:underline }
       <label>machine</label>
       <select id="qc_machine">
         <option value="">Select machine...</option>
-        <!-- JS ile doldurulacak -->
       </select>
     </div>
   </div>
@@ -1640,7 +1679,6 @@ a:hover{ text-decoration:underline }
 </div>
 
 
-    <div class="card">
   <div class="card">
   <h3>CSV Files</h3>
 
@@ -1648,8 +1686,8 @@ a:hover{ text-decoration:underline }
     <div class="dropdown">
       <button>Download v</button>
       <div class="dropdown-content">
-        <a href="./download_accounts">Accounts.csv</a>
-        <a href="./download_transactions">Transactions.csv</a>
+        <a href="./download?file=accounts">Accounts.csv</a>
+        <a href="./download?file=transactions">Transactions.csv</a>
       </div>
     </div>
 
@@ -1661,15 +1699,13 @@ a:hover{ text-decoration:underline }
       </div>
     </div>
 
-    <button onclick="uploadCsv()">Upload CSV</button>
+    <input type="file" id="uploadCsv" accept=".csv" />
+    <button onclick="uploadAuto()">Upload CSV</button>
   </div>
 
   <div id="csv_table" class="table-host"></div>
 </div>
 
-
-
-  </div>
 
 <script>
 function pill2(state, err) {
@@ -1687,53 +1723,19 @@ let machineCountdownInterval = null;
 async function renderMachines() {
   const host = document.getElementById('machines_table');
   if (!host) return;
+
+  let items = [];
   try {
     const res = await fetch('./machines');
-    const js = await res.json();
-    const items = (js && js.machines) ? js.machines : [];
+    const jsRaw = await res.json();
+    items = (jsRaw && jsRaw.machines) ? jsRaw.machines : [];
 
-    const rows = items.map(m => {
-      const machineName =
-        (m.category === 'washing' ? 'Washing' : 'Dryer') + ' - Machine ' + m.id;
+    renderMachinesTable(items);
 
-      const status =
-        m.state === 'on'       ? 'Busy' :
-        m.state === 'off'      ? 'Available' :
-        m.state === 'disabled' ? 'Disabled' : 'Unknown';
-
-      const color =
-        status === 'Busy'      ? '#22c55e' :
-        status === 'Available' ? '#3b82f6' :
-        status === 'Disabled'  ? '#f59e0b' : '#94a3b8';
-
-      // Remaining sadece elimizde deadline varsa
-      const deadline = MACHINE_DEADLINES[m.id] || 0;
-      const remainingCell = `<td data-mid="${m.id}" data-deadline="${deadline || ''}"></td>`;
-
-      return `
-        <tr>
-          <td>${machineName}</td>
-          <td style="color:${color}">${status}</td>
-          ${remainingCell}
-        </tr>`;
-    }).join('');
-
-    host.innerHTML = `
-      <table>
-        <thead>
-          <tr>
-            <th>Machine</th>
-            <th>Status</th>
-            <th>Remaining</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-    `;
-
-    startMachineTicker(); // Remaining hücrelerini her saniye günceller
+    startMachineTicker();
   } catch (e) {
     host.innerHTML = `<div class="error-banner">Failed to load machines.</div>`;
+    return;
   }
 }
 
@@ -1776,7 +1778,6 @@ async function renderHistory() {
   if (!tbody) return;
 
   try {
-    // Son 100 işlemi çek
     const res = await fetch('./history?limit=100');
     const js = await res.json();
 
@@ -1807,7 +1808,7 @@ async function renderHistory() {
 
     tbody.innerHTML = rows;
 
-    if (wrap) wrap.scrollTop = 0; // en yeni başta görünsün
+    if (wrap) wrap.scrollTop = 0;
   } catch (e) {
     tbody.innerHTML = `<tr><td colspan="7"><div class="error-banner">Failed to load history.</div></td></tr>`;
   }
@@ -1882,41 +1883,29 @@ function renderQuickChargeResult(res) {
   const host = document.getElementById('qc_table');
   if (!host) return;
 
-  // Hata durumu
   if (!res || !res.ok) {
-    host.innerHTML = `<div class="error-banner">Charge failed.</div>`;
+    host.innerHTML = `<div class="error-banner">Charge failed: ${(res && res.status) || 'ERROR'}</div>`;
     return;
   }
 
-  const row = `
-    <tr>
-      <td>${res.account_id || ''}</td>
-      <td>${res.name || ''}</td>
-      <td>${res.machine || ''}</td>
-      <td style="color:${res.status === 'OK' ? '#4ade80' : '#f87171'}">
-        ${res.status}
-      </td>
-    </tr>
+  const rows = `
+    <tr><td>account_id</td><td>${res.account_id || ''}</td></tr>
+    <tr><td>name</td><td>${res.name || ''}</td></tr>
+    <tr><td>selected_machine</td><td>${res.machine || ''}</td></tr>
+    <tr><td>status</td><td style="color:${res.status === 'OK' ? '#4ade80' : '#f87171'}">${res.status}</td></tr>
+    ${res.charged != null ? `<tr><td>charged</td><td>${res.charged}</td></tr>` : ''}
+    ${res.balance_before != null ? `<tr><td>balance_before</td><td>${res.balance_before}</td></tr>` : ''}
+    ${res.balance_after  != null ? `<tr><td>balance_after</td><td>${res.balance_after}</td></tr>` : ''}
+    ${res.cycle_minutes  != null ? `<tr><td>cycle_minutes</td><td>${res.cycle_minutes}</td></tr>` : ''}
   `;
 
   host.innerHTML = `
     <table>
-      <thead>
-        <tr>
-          <th>account_id</th>
-          <th>name</th>
-          <th>selected_machine</th>
-          <th>status</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${row}
-      </tbody>
+      <thead><tr><th>field</th><th>value</th></tr></thead>
+      <tbody>${rows}</tbody>
     </table>
   `;
 }
-
-
 
 
 // --- formatting & validation helpers ---
@@ -2070,7 +2059,7 @@ async function initUsersUI() {
   clearFormForNew();
 }
 
-aasync function upsert() {
+async function upsert() {
   const selCode = document.getElementById('u_select').value;
   const codeEl = document.getElementById('u_code');
   const nameEl = document.getElementById('u_name');
@@ -2192,40 +2181,53 @@ async function saveConfig() {
 
 
 async function simulateCharge() {
-  const payload = {
-    tenant_code: document.getElementById('qc_tenant').value,
-    machine: document.getElementById('qc_machine').value,
-    price: document.getElementById('qc_price').value || null,
-    minutes: document.getElementById('qc_minutes').value || null,
-  };
+  try {
+    const tenantEl  = document.getElementById('qc_tenant');
+    const machineEl = document.getElementById('qc_machine');
+    const priceEl   = document.getElementById('qc_price');
+    const minsEl    = document.getElementById('qc_minutes');
 
-  const res = await fetch('./quick_charge', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
+    const qs = new URLSearchParams({
+      tenant_code: (tenantEl.value || '').trim(),
+      machine: (machineEl.value || '').trim(),
+      ...(priceEl.value ? { price: priceEl.value } : {}),
+      ...(minsEl.value  ? { minutes: minsEl.value } : {})
+    });
 
-  const js = await res.json();
+    const res = await fetch(`./simulate/charge?${qs.toString()}`);
+    let js = {};
+    try { js = await res.json(); } catch (_) { js = {}; }
 
-  // tabloya sonucu bas
-  renderQuickChargeResult(js);
-  
-  if (js && js.ok) {
-  const mid = String(document.getElementById('qc_machine').value).trim();
-  const mins =
-    (typeof js.cycle_minutes === 'number' ? js.cycle_minutes : null) ??
-    parseInt(document.getElementById('qc_minutes').value || '0', 10) || 0;
+    const ui = {
+      ok: res.ok && js.ok !== false,
+      account_id: js.tenant_code || (tenantEl.value || '').trim(),
+      name: (window.USERS_CACHE && USERS_CACHE[js.tenant_code]?.name) || '',
+      machine: js.machine || (machineEl.value || '').trim(),
+      status: res.ok ? 'OK' : (js.error || js.message || 'ERROR'),
+      charged: js.charged,
+      balance_before: js.balance_before,
+      balance_after: js.balance_after,
+      cycle_minutes: js.cycle_minutes ?? (minsEl.value ? parseInt(minsEl.value, 10) : null)
+    };
 
-  if (mid) {
-    MACHINE_DEADLINES[mid] = Date.now() + mins * 60 * 1000;
-    renderMachines(); // tabloyu tazeleyelim
+    renderQuickChargeResult(ui);
+
+    if (ui.ok && ui.machine && ui.cycle_minutes) {
+      window.MACHINE_DEADLINES = window.MACHINE_DEADLINES || {};
+      window.MACHINE_DEADLINES[String(ui.machine)] =
+        Date.now() + Number(ui.cycle_minutes) * 60 * 1000;
+
+      if (typeof renderMachines === 'function') {
+        renderMachines();
+      }
+    }
+  } catch (err) {
+    renderQuickChargeResult({ ok: false, status: 'REQUEST_FAILED' });
   }
 }
 
-  
-}
 
-function renderCsvTable(data) {
+function renderCsvTable(data, type) {
   const host = document.getElementById('csv_table');
   if (!host) return;
 
@@ -2234,44 +2236,94 @@ function renderCsvTable(data) {
     return;
   }
 
-  const rows = data.map(acc => {
-    const date = acc.last_transaction_utc
-      ? new Intl.DateTimeFormat("en-NZ", {
-          dateStyle: "short",
-          timeStyle: "short"
-        }).format(new Date(acc.last_transaction_utc))
-      : "";
-    return `
-      <tr>
-        <td>${acc.account_id || ''}</td>
-        <td>${acc.name || ''}</td>
-        <td>${acc.balance ?? ''}</td>
-        <td>${date}</td>
-      </tr>`;
-  }).join("");
-
-  host.innerHTML = `
-    <table>
-      <thead>
+  if (type === 'accounts') {
+    const rows = data.map(acc => {
+      const date = acc.last_transaction_utc
+        ? new Intl.DateTimeFormat("en-NZ", { dateStyle: "short", timeStyle: "short" })
+            .format(new Date(acc.last_transaction_utc))
+        : "";
+      return `
         <tr>
-          <th>account_id</th>
-          <th>name</th>
-          <th>balance</th>
-          <th>last_transaction</th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
-  `;
+          <td>${acc.tenant_code || ''}</td>
+          <td>${acc.name || ''}</td>
+          <td>${acc.balance ?? ''}</td>
+          <td>${date}</td>
+        </tr>`;
+    }).join("");
+
+    host.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>tenant_code</th>
+            <th>name</th>
+            <th>balance</th>
+            <th>last_transaction_utc</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  } else {
+    // transactions
+    const rows = data.map(t => {
+      const date = t.timestamp
+        ? new Intl.DateTimeFormat("en-NZ", { dateStyle: "short", timeStyle: "short" })
+            .format(new Date(t.timestamp))
+        : "";
+      return `
+        <tr>
+          <td>${date}</td>
+          <td>${t.tenant_code || ''}</td>
+          <td>${t.machine_number || ''}</td>
+          <td>${t.amount_charged || ''}</td>
+          <td>${t.balance_after || ''}</td>
+          <td>${t.cycle_minutes || ''}</td>
+          <td>${t.success || ''}</td>
+        </tr>`;
+    }).join("");
+
+    host.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>timestamp</th>
+            <th>tenant_code</th>
+            <th>machine_number</th>
+            <th>amount_charged</th>
+            <th>balance_after</th>
+            <th>cycle_minutes</th>
+            <th>success</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
 }
+
 
 async function openData(type) {
-  const res = await fetch(`./open_${type}`);
-  const js = await res.json();
-  renderCsvTable(js.data || []);
+  if (type === 'accounts') {
+    const res = await fetch('./accounts/list');
+    const js = await res.json();
+    const arr = Object.entries(js.accounts || {}).map(([tenant_code, rec]) => ({
+      tenant_code,
+      name: rec.name || '',
+      balance: rec.balance ?? '',
+      last_transaction_utc: rec.last_transaction_utc || ''
+    }));
+    renderCsvTable(arr, 'accounts');
+  } else {
+    // transactions
+    const res = await fetch('./history?limit=1000');
+    const js = await res.json();
+    renderCsvTable(js.items || [], 'transactions');
+  }
 }
 
-function renderMachines(machines) {
+
+function renderMachinesTable(machines) {
   const host = document.getElementById('machines_table');
   if (!host) return;
 
@@ -2283,28 +2335,28 @@ function renderMachines(machines) {
   const rows = machines.map(m => {
     const machineName = `${m.category === 'washing' ? 'Washing' : 'Dryer'} - Machine ${m.id}`;
 
-    // status stringini üret
     const status =
       m.state === 'on'       ? 'Busy' :
       m.state === 'off'      ? 'Available' :
       m.state === 'disabled' ? 'Disabled' : 'Unknown';
 
-    // pill badge HTML’i
     const statusCell = statusPill(status);
 
-    // remaining time (only if busy)
-    let remaining = '';
-    if (status === 'Busy' && m.remaining_seconds) {
+    let remainingText = '';
+    let deadlineAttr = '';
+    if (status === 'Busy' && Number.isFinite(m.remaining_seconds) && m.remaining_seconds > 0) {
       const mins = Math.floor(m.remaining_seconds / 60);
       const secs = (m.remaining_seconds % 60).toString().padStart(2, '0');
-      remaining = `${mins}:${secs}`;
+      remainingText = `${mins}:${secs}`;
+      const deadlineMs = Date.now() + (m.remaining_seconds * 1000);
+      deadlineAttr = ` data-mid="${String(m.id)}" data-deadline="${deadlineMs}"`;
     }
 
     return `
       <tr>
         <td>${machineName}</td>
         <td>${statusCell}</td>
-        <td class="mono">${remaining}</td>
+        <td class="mono"${deadlineAttr}>${remainingText}</td>
       </tr>`;
   }).join("");
 
@@ -2321,9 +2373,6 @@ function renderMachines(machines) {
     </table>
   `;
 }
-
-
-
 
 async function cat(file, where) {
   const res = await fetch(`./debug/cat?file=${file}&where=${where}`);
@@ -2418,12 +2467,8 @@ def machines():
 
             # Read ADAM DI (if present) and optionally invert
             if has_adam and di is not None:
-                raw = _adam_read_di(di, opts)  # True/False/None expected
-                if raw is not None:
-                    di_val = bool(raw)
-                    if invert_di:
-                        di_val = not di_val
-
+                di_val = _adam_read_di(di, opts)
+                
             # Read from HA sensor (if token present)
             ha_state = None
             if has_token:
@@ -2580,12 +2625,22 @@ def simulate_charge(
     price: Optional[float] = Query(None, ge=0.0),
     minutes: Optional[int] = Query(None, ge=1)
 ):
-    req = {"tenant_code": tenant_code, "machine": machine, "price": price, "cycle_minutes": minutes}
     try:
-        res = charge(req)
-        return res
+        # force simulation regardless of current options
+        opts = _read_options()
+        forced = dict(opts)
+        forced["simulate"] = True
+
+        return _handle_charge(
+            tenant_code=tenant_code,
+            machine=machine,
+            price=price,
+            minutes=minutes,
+            opts=forced
+        )
     except HTTPException as e:
         return JSONResponse({"ok": False, "error": e.detail}, status_code=e.status_code)
+
 
 # ----------------------- History & Debug -----------------
 @app.get("/history")
