@@ -1305,18 +1305,6 @@ h2{
   margin:0;         
 }
 
-
-
-@media (max-width:1024px){
-  .grid{ grid-template-columns:1fr; }
-  .grid > .card:nth-of-type(3){ grid-column:1; grid-row:1; } /* Add/Update */
-  .grid > .card:nth-of-type(5){ grid-column:1; grid-row:2; } /* Quick Charge */
-  .grid > .card:nth-of-type(2){ grid-column:1; grid-row:3; } /* History */
-  .grid > .card:nth-of-type(1){ grid-column:1; grid-row:4; } /* Machines */
-  .grid > .card:nth-of-type(4){ grid-column:1; grid-row:5; } /* Settings */
-  .grid > .card:nth-of-type(6){ grid-column:1; grid-row:6; } /* CSV */
-}
-
 .card{
   background:linear-gradient(180deg, rgba(20,29,50,.70), rgba(17,26,46,.92));
   backdrop-filter:blur(6px);
@@ -1551,6 +1539,11 @@ a:hover{ text-decoration:underline }
 #machines_table{
   max-height:none;
   overflow:visible;
+}
+
+@media (max-width: 1024px){
+  .grid{ grid-template-columns: 1fr; }
+  .col-left, .col-right{ grid-column: 1; }
 }
 
   </style>
