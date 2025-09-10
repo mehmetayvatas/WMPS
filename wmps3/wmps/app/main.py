@@ -1428,8 +1428,8 @@ input, select{
 }
 
 #machines_table{
-  max-height: 240px;   /* tighten */
-  overflow:auto;
+  max-height: none;
+  overflow: visible;
 }
 
 .table-host thead th{
@@ -1456,12 +1456,6 @@ button{
   padding:9px 12px; cursor:pointer;
   box-shadow:var(--shadow-2);
   transition: transform .06s, filter .15s, box-shadow .15s;
-}
-
-button.btn-xs{
-  padding:9px 12px;          /* normal button padding */
-  font-size:14px;            /* normal text size */
-  border-radius:var(--radius-xs);
 }
 
 button:hover{ filter:brightness(1.05) }
@@ -1634,25 +1628,46 @@ a:hover{ text-decoration:underline }
   <!-- Machines -->
   <div class="muted" style="margin:6px 0 -2px 2px;">Machines</div>
   <div class="row">
-    <label>Washing machines (comma-separated)</label><input id="cfg_wm" placeholder="1,2,3"/></div>
-    <label>Dryer machines (comma-separated)</label><input id="cfg_dm" placeholder="4,5,6"/></div>
+    <div>
+      <label>Washing machines (comma-separated)</label>
+      <input id="cfg_wm" placeholder="1,2,3"/>
+    </div>
+    <div>
+      <label>Dryer machines (comma-separated)</label>
+      <input id="cfg_dm" placeholder="4,5,6"/>
+    </div>
   </div>
 
   <!-- Durations -->
   <div class="row">
-    <label>Washing minutes</label><input id="cfg_wmin" placeholder="30"/></div>
-    <label>Dryer minutes</label><input id="cfg_dmin" placeholder="60"/></div>
+    <div>
+      <label>Washing minutes</label>
+      <input id="cfg_wmin" placeholder="30"/>
+    </div>
+    <div>
+      <label>Dryer minutes</label>
+      <input id="cfg_dmin" placeholder="60"/>
+    </div>
   </div>
 
   <!-- Pricing -->
   <div class="row">
-    <label>Price — Washing</label><input id="cfg_wp" placeholder="5"/></div>
-    <label>Price — Dryer</label><input id="cfg_dp" placeholder="5"/></div>
+    <div>
+      <label>Price — Washing</label>
+      <input id="cfg_wp" placeholder="5"/>
+    </div>
+    <div>
+      <label>Price — Dryer</label>
+      <input id="cfg_dp" placeholder="5"/>
+    </div>
   </div>
 
   <!-- Disabled -->
   <div class="row">
-    <label>Disabled machines (comma-separated)</label><input id="cfg_disabled" placeholder="e.g. 2,5"/></div>
+    <div>
+      <label>Disabled machines (comma-separated)</label>
+      <input id="cfg_disabled" placeholder="e.g. 2,5"/>
+    </div>
     <div></div>
   </div>
 
@@ -1662,9 +1677,10 @@ a:hover{ text-decoration:underline }
     <button onclick="saveConfig()" style="margin-left:8px;">Save Settings</button>
   </div>
 
-  <!-- Compact table preview instead of raw JSON -->
+  <!-- Compact table preview -->
   <div id="cfg_table" class="table-host"></div>
 </div>
+
 
 
     <div class="card">
