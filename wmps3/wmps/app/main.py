@@ -2238,10 +2238,14 @@ function populateUserSelect(selectedCode = "") {
   if (selectedCode) {
     const rec = USERS_CACHE[selectedCode];
     input.value = rec && rec.name ? `${selectedCode} — ${rec.name}` : selectedCode;
+    input.placeholder = 'New user';
   } else {
-    input.value = 'New user'; // varsayılan metin
+    // New user yazısını değer olarak değil, placeholder olarak göster
+    input.value = '';
+    input.placeholder = 'New user';
   }
 }
+
 
 
 
@@ -2264,7 +2268,10 @@ function clearFormForNew() {
   renderUserTable(null);
 
   const selInput = document.getElementById('u_select');
-  if (selInput) selInput.value = 'New user';
+if (selInput) {
+  selInput.value = '';
+  selInput.placeholder = 'New user';
+}
 }
 
 
