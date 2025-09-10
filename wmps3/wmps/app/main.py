@@ -1290,17 +1290,19 @@ body{
 
 h2{
   margin:4px 0 20px 0;
+  max-width:none;
   font-weight:800; letter-spacing:.2px;
 }
 
+
 .grid{
   display:grid;
-  /* sol esnek, sağ sabit genişlik (sağdaki mevcut kartlar taşmadan sığsın) */
-  grid-template-columns: minmax(620px, 1fr) 520px;
-  grid-auto-flow: row dense;   /* boşluk kalmasın */
-  gap:12px;
+  grid-template-columns: 1fr 560px;
+  gap:8px;                
   align-items:start;
-  max-width:1280px; margin:0 auto;
+  width:100%;
+  max-width:none;
+  margin:0;         
 }
 
 
@@ -1417,11 +1419,6 @@ input, select{
 .table-host{
   max-height: clamp(160px, 32vh, 360px);
   overflow:auto;
-}
-
-#machines_table{
-  max-height:none;
-  overflow:visible;
 }
 
 .table-host thead th{
@@ -1542,19 +1539,19 @@ a:hover{ text-decoration:underline }
 .col-left  { grid-column: 1; }
 .col-right { grid-column: 2; }
 
+/* Kart içerik kadar büyüsün; taşma olmasın */
 .card{ overflow: visible; }
 
 #user_table.table-host,
-#qc_table.table-host { 
-  max-height: none; 
-  overflow: visible; 
+#qc_table.table-host{
+  max-height:none;
+  overflow:visible;
 }
 
-#machines_table{ 
-  max-height: none; 
-  overflow: visible; 
+#machines_table{
+  max-height:none;
+  overflow:visible;
 }
-
 
   </style>
 </head>
