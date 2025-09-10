@@ -2337,13 +2337,13 @@ async function initUsersUI() {
   const input = document.getElementById('u_select');
   const caret = document.getElementById('u_select_caret');
 
-  // yazdıkça filtrele
+
   input.addEventListener('input', () => showComboSuggestions(input.value));
 
-  // focus olunca öneri aç
+
   input.addEventListener('focus', () => showComboSuggestions(input.value));
 
-  // klavye ile gezinme/ seçim
+ 
   input.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); navigateCombo(+1); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); navigateCombo(-1); }
@@ -2352,7 +2352,7 @@ async function initUsersUI() {
       const act = box && box.querySelector('.combo-item.active');
       if (act) { e.preventDefault(); pickComboValue(act.dataset.code); }
       else {
-        // elle yazılan bir kod olabilir
+        
         const code = parseCodeFromInput(input.value);
         if (code) pickComboValue(code);
       }
@@ -2361,15 +2361,17 @@ async function initUsersUI() {
     }
   });
 
-  // caret tıkla → aç/kapat
+ 
   caret.addEventListener('click', (e) => {
-    e.preventDefault();
-    const box = document.getElementById('u_combo_list');
-    if (box.classList.contains('open')) closeComboList(); else showComboSuggestions('');
-    input.focus();
-  });
+  e.preventDefault();
+  input.value = '';
+  input.placeholder = 'New user';
+  showComboSuggestions('');
+  input.focus();
+});
 
-  // dışarı tıklama → kapat
+
+ 
   document.addEventListener('click', (e) => {
     const wrap = document.getElementById('u_combo');
     if (wrap && !wrap.contains(e.target)) closeComboList();
