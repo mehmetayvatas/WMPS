@@ -1652,10 +1652,11 @@ html, body {
 <body>
   <h2>WMPS Control Panel</h2>
 <div id="layoutToolbar">
-  <button id="layoutClose" class="btn-secondary">Close Layout Mode</button>
-  <button id="layoutReset" class="btn-ghost">Reset</button>
+  <button id="layout_toggle" class="btn-secondary">Customize Layout</button>
+  <button id="layout_reset" class="btn-ghost">Reset</button>
   <span class="hint">Drag cards by the title bar, resize from the bottom-right corner. Changes are saved automatically.</span>
 </div>
+
 
 <div id="layout_canvas" class="layout-canvas" style="display:none;"></div>
 
@@ -2068,12 +2069,16 @@ function renderQuickChargeResult(res) {
     ${res.cycle_minutes  != null ? `<tr><td>Minutes</td><td>${res.cycle_minutes}</td></tr>` : ''}
   `;
 
-  host.innerHTML = `
-    <table>
-      <thead><tr><th>field</th><th>value</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
-  `;
+ host.innerHTML = `
+  <table>
+    <thead>
+      <tr><th>Setting</th><th>Value</th></tr>
+    </thead>
+    <tbody>
+      ${trs}
+    </tbody>
+  </table>
+`;
 }
 
 
@@ -2645,10 +2650,11 @@ initUsersUI();
 function fitCanvasToCards() {
   // Prefer a dedicated host if present; otherwise fall back to the grid or body
   const host =
-    document.getElementById('freeLayoutHost') ||
-    document.getElementById('layoutCanvas') ||
-    document.querySelector('.grid') ||
-    document.body;
+      document.getElementById('freeLayoutHost') ||
+      document.getElementById('layout_canvas') ||
+      document.querySelector('.grid') ||
+      document.body;
+
 
   // Measure absolutely/fixed positioned cards
   const cards = Array.from(document.querySelectorAll('.card'));
