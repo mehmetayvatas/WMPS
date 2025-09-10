@@ -2155,6 +2155,12 @@ function renderQuickChargeResult(res) {
 
 
 // --- formatting & validation helpers ---
+function parseCodeFromInput(value) {
+  const s = String(value || '').trim();
+  const m = s.match(/^(\d{6})(?:\s*[—-]\s*.*)?$/);
+  return m ? m[1] : '';
+}
+
 function formatMoney(v) {
   const n = Number(v);
   if (!isFinite(n)) return "0.00";
@@ -2352,10 +2358,12 @@ async function initUsersUI() {
 
   // Refresh → listeyi güncelle
   document.getElementById('u_refresh').addEventListener('click', async ()=>{
-    await fetchAccounts();
-    populateUserSelect(parseCodeFromInput(input.value));
-    showComboSuggestions(input.value);
-  });
+  await fetchAccounts();
+  const currentCode = parseCodeFromInput(input.value) || '';
+  populateUserSelect(currentCode);
+  showComboSuggestions(input.value);
+});
+
 
   clearFormForNew();
 }
