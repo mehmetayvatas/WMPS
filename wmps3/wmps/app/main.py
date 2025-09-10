@@ -2157,7 +2157,7 @@ function renderQuickChargeResult(res) {
 // --- formatting & validation helpers ---
 function parseCodeFromInput(value) {
   const s = String(value || '').trim();
-  const m = s.match(/^(\d{6})(?:\s*[—-]\s*.*)?$/);
+  const m = s.match(/^([0-9]{6})(?:[ \t]*[—-][ \t]*.*)?$/);
   return m ? m[1] : '';
 }
 
