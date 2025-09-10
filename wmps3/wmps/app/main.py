@@ -2236,9 +2236,9 @@ function populateUserSelect(selectedCode = "") {
 
 function clearFormForNew() {
   const codeEl = document.getElementById('u_code');
-  codeEl.readOnly = true;                          
-  codeEl.value = generateUniqueAccountId();      
-  codeEl.placeholder = 'Auto-generated';
+  codeEl.readOnly = false;                         
+  codeEl.value = generateUniqueAccountId();   
+  codeEl.placeholder = '6-digit Account ID'; 
 
   const nameEl = document.getElementById('u_name');
   nameEl.value = '';
@@ -2468,7 +2468,7 @@ async function upsert() {
   const current = parseNonNegativeFloat(balCurEl.value, 0);
   const topup = parseNonNegativeFloat(topupEl.value, 0);
 
-  const isNew = !selCode; // combobox'ta "New user" modundaysak
+  const isNew = !selCode; 
 
   // Validasyon
   if (!name) {
@@ -2477,12 +2477,18 @@ async function upsert() {
     return;
   }
   if (isNew) {
-    // ID otomatik; yine de garanti olsun
-    if (!isSixDigitCode(code)) {
-      const g = generateUniqueAccountId();
-      codeEl.value = g;
-    }
-  } else {
+  if (!isSixDigitCode(code)) {
+    alert('Account ID needs to be 6 digits');
+    codeEl.focus();
+    return;
+  }
+  if (USERS_CACHE && USERS_CACHE[code]) {
+    alert('This code has been given before.');
+    codeEl.focus();
+    return;
+  }
+} else {
+
     if (topup < 0) {
       alert('Top-up amount cannot be negative.');
       topupEl.focus();
@@ -2490,10 +2496,8 @@ async function upsert() {
     }
   }
 
-  // Bakiye hesabı
   const newBalance = isNew ? topup : (current + topup);
 
-  // Yeni → create (benzersiz zorunlu), Var olan → upsert
   const endpoint = isNew ? './accounts/create' : './accounts/upsert';
 
   const body = { tenant_code: code, name, balance: newBalance };
@@ -2503,14 +2507,13 @@ async function upsert() {
     body: JSON.stringify(body)
   });
 
-  // Çakışma durumunu yakala (create 409 döndürebilir)
   if (!res.ok) {
     const jsErr = await res.json().catch(()=>({}));
     if (res.status === 409 && jsErr && jsErr.detail === 'TENANT_EXISTS') {
       alert('Generated Account ID already exists. Generating a new one…');
       const fresh = generateUniqueAccountId();
       codeEl.value = fresh;
-      return; // kullanıcı tekrar "Save"e basabilir
+      return; 
     }
     alert('Save failed.');
     return;
@@ -2983,7 +2986,7 @@ if (document.readyState === 'loading') {
     el.style.left   = (g.x|0) + 'px';
     el.style.top    = (g.y|0) + 'px';
     el.style.width  = Math.max(320, g.w|0) + 'px';
-    el.style.height = Math.max(140, g.h|0) + 'px';
+    el.style.height = 'auto';
   }
 
   function collectCards(){
@@ -3005,7 +3008,7 @@ if (document.readyState === 'loading') {
     const W = CANVAS.clientWidth;
     const H = CANVAS.clientHeight;
     g.w = Math.max(320, Math.min(g.w, W - g.x - pad));
-    g.h = Math.max(140, Math.min(g.h, H - g.y - pad));
+    // g.h = Math.max(140, Math.min(g.h, H - g.y - pad));
     g.x = Math.max(pad, Math.min(g.x, W - 320));
     g.y = Math.max(pad, Math.min(g.y, H - 100));
     return g;
@@ -3124,11 +3127,10 @@ if (document.readyState === 'loading') {
   }
 
   function deactivateLayout(){
-    // If you prefer to return to the original two-column grid when closing:
-    // document.body.classList.remove('layout-active');
-    // CANVAS.style.display = 'none';
-    BTN_TOGGLE.textContent = 'Customize Layout';
-  }
+  document.body.classList.remove('layout-active');  // grid’e geri dön
+  CANVAS.style.display = 'none';
+  BTN_TOGGLE.textContent = 'Customize Layout';
+}
 
   BTN_TOGGLE.addEventListener('click', () => {
     if (!document.body.classList.contains('layout-active')){
