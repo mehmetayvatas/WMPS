@@ -2390,7 +2390,6 @@ function buildComboHTML(items){
   }).join('');
 }
 
-// input değerine göre öneri göster
 function showComboSuggestions(query=''){
   const box   = document.getElementById('u_combo_list');
   const input = document.getElementById('u_select');
@@ -2398,36 +2397,61 @@ function showComboSuggestions(query=''){
 
   const q = String(query || input.value || '').trim().toLowerCase();
   const all = sortedUserEntries();
-  const filtered = q
-    ? all.filter(([code, rec]) => {
-        const name = (rec.name || '').toLowerCase();
-        return code.toLowerCase().includes(q) || name.includes(q);
-      })
-    : all.slice(0, 50); // boşsa ilk 50
 
+  // Genişletilmiş eşleşme: code, name ve "code — name" etiketi
+  const filterFn = ([code, rec]) => {
+    const codeL  = String(code || '').toLowerCase();
+    const nameL  = String(rec?.name || '').toLowerCase();
+    const labelL = `${code} — ${rec?.name || ''}`.toLowerCase(); // etiket
+    if (!q) return true; // boş aramada hepsi geçer, sonra kısıtlarız
+    return codeL.includes(q) || nameL.includes(q) || labelL.includes(q);
+  };
+
+  let filtered = q ? all.filter(filterFn)
+                   : all.slice(0, 50);
+
+  // Boş aramada: seçili kullanıcıyı mutlaka listeye ekle ve en üste pinle
+  const currentCode = parseCodeFromInput(input.value) || '';
+  if (!q && currentCode) {
+    const inFiltered = filtered.findIndex(([c]) => c === currentCode) !== -1;
+    if (!inFiltered) {
+      const hit = all.find(([c]) => c === currentCode);
+      if (hit) filtered.unshift(hit);
+    }
+  }
+
+  const hasAny = all.length > 0;
   box.innerHTML =
-  `<div class="combo-item" role="option" data-code="" data-new="1">New user</div>` +
-  buildComboHTML(filtered);
+    `<div class="combo-item" role="option" data-code="" data-new="1">New user</div>` +
+    (hasAny ? buildComboHTML(filtered) : `<div class="combo-empty">No users found (CSV empty or not loaded)</div>`);
+
   box.classList.add('open');
   box.setAttribute('aria-expanded','true');
 
-  // Mouse ile seçim
-  box.querySelectorAll('.combo-item').forEach(el=>{
-  el.addEventListener('click', ()=>{
-    if (el.dataset.new === '1') {      
-      closeComboList();
-      clearFormForNew();
-      populateUserSelect('');       
-      return;
-    }
-    const code = el.dataset.code;
-    pickComboValue(code);
+  box.querySelectorAll('.combo-item').forEach(el => {
+    el.addEventListener('click', () => {
+      if (el.dataset.new === '1') {
+        closeComboList();
+        clearFormForNew();
+        populateUserSelect('');
+        return;
+      }
+      const code = el.dataset.code;
+      if (code) pickComboValue(code);
+    });
   });
-});
 
-  // İlk öğeyi aktif işaretle (klavye için)
-  setActiveComboIndex(0);
+  let activeIdx = 0; // 0 = "New user"
+  if (currentCode) {
+    const items = filtered.map(([c]) => c);
+    const idx = items.indexOf(currentCode);
+    if (idx >= 0) activeIdx = idx + 1; 
+  } else if (filtered.length > 0) {
+    activeIdx = 1; 
+  }
+  setActiveComboIndex(activeIdx);
 }
+
 
 let _comboActiveIndex = -1;
 function setActiveComboIndex(idx){
