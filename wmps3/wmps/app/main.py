@@ -2210,11 +2210,22 @@ function showUserError(msg){
 let USERS_CACHE = {};
 
 async function fetchAccounts() {
-  const res = await fetch('./accounts/list');
-  const js = await res.json();
-  USERS_CACHE = js.accounts || {};
-  return USERS_CACHE;
+  try {
+    const res = await fetch('./accounts/list', { cache: 'no-store' });
+    if (!res.ok) throw new Error('http ' + res.status);
+
+    const js = await res.json().catch(() => ({}));
+    const incoming = (js && typeof js.accounts === 'object') ? js.accounts : null;
+
+    if (incoming && Object.keys(incoming).length > 0) {
+      USERS_CACHE = { ...USERS_CACHE, ...incoming };
+    }
+    return USERS_CACHE;
+  } catch (e) {
+    return USERS_CACHE;
+  }
 }
+
 
 function sortedUserEntries() {
   return Object.entries(USERS_CACHE).sort((a,b)=> a[0].localeCompare(b[0]));
@@ -2314,6 +2325,7 @@ function renderUserTable(rec) {
 async function initUsersUI() {
   await fetchAccounts();
   populateUserSelect();
+  showComboSuggestions('');
 
   const input = document.getElementById('u_select');
   const caret = document.getElementById('u_select_caret');
@@ -2356,13 +2368,13 @@ async function initUsersUI() {
     if (wrap && !wrap.contains(e.target)) closeComboList();
   });
 
-  // Refresh → listeyi güncelle
-  document.getElementById('u_refresh').addEventListener('click', async ()=>{
-  await fetchAccounts();
+ document.getElementById('u_refresh').addEventListener('click', async () => {
   const currentCode = parseCodeFromInput(input.value) || '';
-  populateUserSelect(currentCode);
-  showComboSuggestions(input.value);
+  await fetchAccounts();                 
+  populateUserSelect(currentCode);          
+  showComboSuggestions('');                 
 });
+
 
 
   clearFormForNew();
