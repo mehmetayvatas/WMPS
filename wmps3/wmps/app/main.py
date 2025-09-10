@@ -2171,6 +2171,23 @@ function isSixDigitCode(v) {
   return /^[0-9]{6}$/.test(String(v || "").trim());
 }
 
+function generateUniqueAccountId() {
+  const used = new Set(Object.keys(USERS_CACHE || {}));
+  for (let i = 0; i < 20; i++) {
+    const code = String(Math.floor(100000 + Math.random() * 900000)); // 100000..999999
+    if (!used.has(code)) return code;
+  }
+  let n = 100000;
+  while (n <= 999999) {
+    const code = String(n);
+    if (!used.has(code)) return code;
+    n++;
+  }
+  return String(Date.now()).slice(-6);
+}
+
+
+
 function showUserError(msg){
   const box = document.getElementById('user_error');
   if(!box) return;
@@ -2198,7 +2215,6 @@ function sortedUserEntries() {
 }
 
 function populateUserSelect(selectedCode = "") {
-  // sadece başlangıç değerini gösterir; asıl listeyi showComboSuggestions üretir
   const input = document.getElementById('u_select');
   if (!input) return;
 
@@ -2206,16 +2222,17 @@ function populateUserSelect(selectedCode = "") {
     const rec = USERS_CACHE[selectedCode];
     input.value = rec && rec.name ? `${selectedCode} — ${rec.name}` : selectedCode;
   } else {
-    input.value = '';
+    input.value = 'New user'; // varsayılan metin
   }
 }
 
 
+
 function clearFormForNew() {
   const codeEl = document.getElementById('u_code');
-  codeEl.value = '';
-  codeEl.readOnly = false;
-  codeEl.placeholder = '6-digit account id';
+  codeEl.readOnly = true;                          
+  codeEl.value = generateUniqueAccountId();      
+  codeEl.placeholder = 'Auto-generated';
 
   const nameEl = document.getElementById('u_name');
   nameEl.value = '';
@@ -2228,7 +2245,11 @@ function clearFormForNew() {
   topupEl.placeholder = 'initial balance (e.g. 25)';
 
   renderUserTable(null);
+
+  const selInput = document.getElementById('u_select');
+  if (selInput) selInput.value = 'New user';
 }
+
 
 
 function fillFormFromCode(code) {
@@ -2364,17 +2385,25 @@ function showComboSuggestions(query=''){
       })
     : all.slice(0, 50); // boşsa ilk 50
 
-  box.innerHTML = buildComboHTML(filtered);
+  box.innerHTML =
+  `<div class="combo-item" role="option" data-code="" data-new="1">New user</div>` +
+  buildComboHTML(filtered);
   box.classList.add('open');
   box.setAttribute('aria-expanded','true');
 
   // Mouse ile seçim
   box.querySelectorAll('.combo-item').forEach(el=>{
-    el.addEventListener('click', ()=>{
-      const code = el.dataset.code;
-      pickComboValue(code);
-    });
+  el.addEventListener('click', ()=>{
+    if (el.dataset.new === '1') {      
+      closeComboList();
+      clearFormForNew();
+      populateUserSelect('');       
+      return;
+    }
+    const code = el.dataset.code;
+    pickComboValue(code);
   });
+});
 
   // İlk öğeyi aktif işaretle (klavye için)
   setActiveComboIndex(0);
@@ -2431,21 +2460,21 @@ async function upsert() {
   const current = parseNonNegativeFloat(balCurEl.value, 0);
   const topup = parseNonNegativeFloat(topupEl.value, 0);
 
-  // basic validations
-  if (!selCode) {
-    // new user: require 6-digit id
+  const isNew = !selCode; // combobox'ta "New user" modundaysak
+
+  // Validasyon
+  if (!name) {
+    alert('Please enter a name.');
+    nameEl.focus();
+    return;
+  }
+  if (isNew) {
+    // ID otomatik; yine de garanti olsun
     if (!isSixDigitCode(code)) {
-      alert('Please enter a valid 6-digit account_id.');
-      codeEl.focus();
-      return;
-    }
-    if (!name) {
-      alert('Please enter a name.');
-      nameEl.focus();
-      return;
+      const g = generateUniqueAccountId();
+      codeEl.value = g;
     }
   } else {
-    // existing user: no negative top-up
     if (topup < 0) {
       alert('Top-up amount cannot be negative.');
       topupEl.focus();
@@ -2453,30 +2482,39 @@ async function upsert() {
     }
   }
 
-  let newBalance = current;
-  if (selCode) {
-    // Existing user → add top_up_amount to current_balance
-    newBalance = current + topup;
-  } else {
-    // New user → initial balance = top_up_amount
-    newBalance = topup;
-  }
+  // Bakiye hesabı
+  const newBalance = isNew ? topup : (current + topup);
+
+  // Yeni → create (benzersiz zorunlu), Var olan → upsert
+  const endpoint = isNew ? './accounts/create' : './accounts/upsert';
 
   const body = { tenant_code: code, name, balance: newBalance };
-  const res = await fetch('./accounts/upsert', {
+  const res = await fetch(endpoint, {
     method:'POST',
     headers: {'Content-Type':'application/json'},
     body: JSON.stringify(body)
   });
-  const js = await res.json();
 
-  if (!res.ok || !js.ok) {
+  // Çakışma durumunu yakala (create 409 döndürebilir)
+  if (!res.ok) {
+    const jsErr = await res.json().catch(()=>({}));
+    if (res.status === 409 && jsErr && jsErr.detail === 'TENANT_EXISTS') {
+      alert('Generated Account ID already exists. Generating a new one…');
+      const fresh = generateUniqueAccountId();
+      codeEl.value = fresh;
+      return; // kullanıcı tekrar "Save"e basabilir
+    }
     alert('Save failed.');
     return;
   }
-  showUserError(null);
 
-  // Refresh UI (and keep selection)
+  const js = await res.json();
+  if (!js.ok) {
+    alert('Save failed.');
+    return;
+  }
+
+  showUserError(null);
   await fetchAccounts();
   populateUserSelect(code);
   fillFormFromCode(code);
@@ -3264,6 +3302,48 @@ def accounts_upsert(acc: dict):
         "balance": float(balance),
         "last_transaction_utc": now_iso
     }
+
+@app.post("/accounts/create")
+def accounts_create(acc: dict):
+    """
+    Yeni hesap oluşturur. tenant_code zaten varsa 409 döner.
+    Body: { tenant_code: str, name: str, balance: float }
+    """
+    ensure_bootstrap_files()
+    required = {"tenant_code","balance"}
+    if not required.issubset(acc.keys()):
+        raise HTTPException(status_code=400, detail="tenant_code and balance required")
+
+    tenant_code = str(acc.get("tenant_code")).strip()
+    name = str(acc.get("name") or "").strip()
+    try:
+        balance = float(acc.get("balance"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="balance must be a number")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    with file_lock(GLOBAL_LOCK, timeout=10.0):
+        accounts = read_accounts()
+        if tenant_code in accounts:
+            # Benzersizlik garantisi
+            raise HTTPException(status_code=409, detail="TENANT_EXISTS")
+
+        accounts[tenant_code] = {
+            "name": name,
+            "balance": float(balance),
+            "last_transaction_utc": now_iso
+        }
+        write_accounts(accounts)
+
+    return {
+        "ok": True,
+        "tenant_code": tenant_code,
+        "name": name,
+        "balance": float(balance),
+        "last_transaction_utc": now_iso
+    }
+
 
 @app.get("/accounts/list")
 def accounts_list():
