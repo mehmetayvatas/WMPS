@@ -1452,11 +1452,6 @@ button:disabled{ opacity:.6; cursor:not-allowed; filter:grayscale(.2) }
 button.btn-secondary{ background:linear-gradient(180deg,#64748b,#334155) }
 button.btn-ghost{ background:transparent; border:1px solid var(--line) }
 button.btn-danger{ background:linear-gradient(180deg,#ef4444,#7f1d1d) }
-button.btn-xs{
-  padding: 6px 10px;
-  font-size: 12px;
-  border-radius: 8px;
-}
 
 .row{ display:grid; grid-template-columns:1fr 1fr; gap:8px }
 @media (max-width:560px){ .row{ grid-template-columns:1fr } }
@@ -1616,14 +1611,49 @@ a:focus-visible{
   [data-win]{ width: calc(100% - 24px); left:12px !important; }
 }
 
+/* Make the canvas/page expand with content */
+html, body {
+  min-height: 100%;
+}
+
+/* Override the generic table-host clamp for Settings table so it never scrolls */
+#cfg_table.table-host {
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+/* (Opsiyonel) Users ve Machines tablolarını da tamamen göstermek istersen aç: */
+/*
+#user_table.table-host,
+#machines_table.table-host {
+  max-height: none !important;
+  overflow: visible !important;
+}
+*/
+
+/* Layout toolbar fixed to the top-right */
+#layoutToolbar {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  z-index: 9999;
+}
+#layoutToolbar .hint {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
 
   </style>
 </head>
 <body>
   <h2>WMPS Control Panel</h2>
-<div class="layout-toolbar">
-  <button id="layout_toggle" class="btn-secondary">Customize Layout</button>
-  <button id="layout_reset" class="btn-ghost">Reset</button>
+<div id="layoutToolbar">
+  <button id="layoutClose" class="btn-secondary">Close Layout Mode</button>
+  <button id="layoutReset" class="btn-ghost">Reset</button>
   <span class="hint">Drag cards by the title bar, resize from the bottom-right corner. Changes are saved automatically.</span>
 </div>
 
@@ -2571,6 +2601,7 @@ async function uploadAuto() {
 async function refresh() { await renderMachines(); await renderHistory(); }
 refresh(); loadConfig();
 initUsersUI();
+
 (function(){
   function initDownloadMenu(){
     const box  = document.getElementById('dl_box');
@@ -2609,6 +2640,59 @@ initUsersUI();
     initDownloadMenu();
   }
 })();
+
+/* --------- Canvas auto-fit (page grows with free-positioned cards) --------- */
+function fitCanvasToCards() {
+  // Prefer a dedicated host if present; otherwise fall back to the grid or body
+  const host =
+    document.getElementById('freeLayoutHost') ||
+    document.getElementById('layoutCanvas') ||
+    document.querySelector('.grid') ||
+    document.body;
+
+  // Measure absolutely/fixed positioned cards
+  const cards = Array.from(document.querySelectorAll('.card'));
+  let maxBottom = 0;
+
+  cards.forEach(el => {
+    const style = window.getComputedStyle(el);
+    const isAbs = style.position === 'absolute' || style.position === 'fixed';
+    const rect = el.getBoundingClientRect();
+    const bottom = window.scrollY + rect.bottom;
+    if (isAbs) {
+      maxBottom = Math.max(maxBottom, bottom);
+    }
+  });
+
+  if (maxBottom > 0) {
+    const extra = 200; // breathing room
+    const px = Math.ceil(maxBottom + extra);
+    if (host && host !== document.body) {
+      host.style.minHeight = px + 'px';
+      host.style.height = px + 'px';
+    } else {
+      document.documentElement.style.minHeight = px + 'px';
+      document.body.style.minHeight = px + 'px';
+    }
+  }
+}
+
+// Refitting on resize (debounced lightly)
+window.addEventListener('resize', () => {
+  fitCanvasToCards();
+  setTimeout(fitCanvasToCards, 100);
+});
+
+// First paint: run once the DOM and initial async renders settle
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(fitCanvasToCards, 0);
+    setTimeout(fitCanvasToCards, 120);
+  });
+} else {
+  setTimeout(fitCanvasToCards, 0);
+  setTimeout(fitCanvasToCards, 120);
+}
 
 </script>
 <script>
