@@ -1297,13 +1297,16 @@ h2{
 
 .grid{
   display:grid;
-  grid-template-columns: 1fr 560px;
-  gap:8px;                
+  grid-template-columns: minmax(0,1fr) 560px;
+  column-gap:2px;   
+  row-gap:0;         
   align-items:start;
   width:100%;
   max-width:none;
-  margin:0;         
+  margin:0;
 }
+
+
 
 .card{
   background:linear-gradient(180deg, rgba(20,29,50,.70), rgba(17,26,46,.92));
@@ -1313,9 +1316,16 @@ h2{
   padding:12px;
   box-shadow:var(--shadow-1);
   align-self:start;
+
+  margin:0;            /* kartlar arası dış boşluk yok */
+  overflow:visible;    /* içerikler (tablolar) tam görünsün */
 }
-.card{ overflow: visible; }
-.card h3{ margin:0 0 8px 0; font-size:18px; font-weight:700 }
+
+.card h3{
+  margin:0 0 8px 0;
+  font-size:18px;
+  font-weight:700;
+}
 
 label{
   display:block;
@@ -1442,6 +1452,11 @@ button:disabled{ opacity:.6; cursor:not-allowed; filter:grayscale(.2) }
 button.btn-secondary{ background:linear-gradient(180deg,#64748b,#334155) }
 button.btn-ghost{ background:transparent; border:1px solid var(--line) }
 button.btn-danger{ background:linear-gradient(180deg,#ef4444,#7f1d1d) }
+button.btn-xs{
+  padding: 6px 10px;
+  font-size: 12px;
+  border-radius: 8px;
+}
 
 .row{ display:grid; grid-template-columns:1fr 1fr; gap:8px }
 @media (max-width:560px){ .row{ grid-template-columns:1fr } }
@@ -1486,6 +1501,10 @@ tbody tr:hover{ background:#0f1a2b }
   background:#2a3b59; border-radius:8px; border:2px solid transparent; background-clip:padding-box;
 }
 *::-webkit-scrollbar-thumb:hover{ background:#35507b }
+html{
+  scrollbar-color: #2a3b59 transparent;
+  scrollbar-width: thin;
+}
 
 .pill{
   display:inline-block; padding:3px 8px; border-radius:999px; font-size:11px;
@@ -1493,7 +1512,7 @@ tbody tr:hover{ background:#0f1a2b }
 }
 .pill-ok{ background:#0f2f1d; border-color:#1e5b38; color:#b6f3c8 }   /* Busy */
 .pill-idle{ background:#161e33; border-color:#2a3b5a; color:#cfe7ff }  /* Available */
-.pill-warn{ background:#2b1f13; border-color:#6b4e1e; color:#f8e0b3 }  /* Disabled */
+.pill-warn{ background:#2b1f13; border-color:#6b4e1e; color:#f6d083 } /* Disabled */
 .pill-err{ background:#2a1414; border-color:#6e2525; color:#ffc1c1 }   /* Unknown/Error */
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
 
@@ -1503,19 +1522,15 @@ tbody tr:hover{ background:#0f1a2b }
 #machines tbody td{ padding:8px 10px; font-size:13px }
 #machines tbody tr{ height:36px }
 
-.grid > .card:nth-of-type(6) .row{
-  display:flex !important;
-  gap:8px; flex-wrap:wrap; align-items:center; justify-content:flex-start;
+#csv_card .row{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  align-items:center;
+  justify-content:flex-start;
   margin:6px 0 4px 0;
 }
-.grid > .card:nth-of-type(6) .row > div{ display:contents; }
-.grid > .card:nth-of-type(6) > div:nth-of-type(2){
-  display:flex !important;
-  gap:8px; flex-wrap:wrap; align-items:center; justify-content:flex-start;
-  margin-top:8px !important;
-}
-.grid > .card:nth-of-type(6) > div:nth-of-type(2) button{ margin-left:0 !important; }
-.grid > .card:nth-of-type(6) button{ white-space:nowrap; }
+#csv_card button{ white-space:nowrap; }
 
 @media (max-width:720px){
   .card{ padding:12px }
@@ -1523,12 +1538,20 @@ tbody tr:hover{ background:#0f1a2b }
 }
 a{ color:#9cc4ff; text-decoration:none }
 a:hover{ text-decoration:underline }
+a:focus-visible{
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 
-.col-left  { grid-column: 1; }
-.col-right { grid-column: 2; }
+.col-stack{
+  display:flex;
+  flex-direction:column;
+  gap: 2px;
+}
+.card.spacer{ margin-top:8px; }
 
-/* Kart içerik kadar büyüsün; taşma olmasın */
-.card{ overflow: visible; }
+.col-stack.left  { grid-column: 1; }
+.col-stack.right { grid-column: 2; }
 
 #user_table.table-host,
 #qc_table.table-host{
@@ -1543,201 +1566,284 @@ a:hover{ text-decoration:underline }
 
 @media (max-width: 1024px){
   .grid{ grid-template-columns: 1fr; }
-  .col-left, .col-right{ grid-column: 1; }
+  .col-stack.left, .col-stack.right{ grid-column: 1; }
 }
+
+/* ====== Draggable/Resizable layout (windowed cards) ====== */
+.layout-toolbar{
+  display:flex; gap:8px; align-items:center; margin:8px 0 12px 0;
+}
+.layout-toolbar .hint{ font-size:12px; color:var(--muted) }
+
+.layout-canvas{
+  position: relative;
+  min-height: 900px;
+  border:1px dashed var(--line);
+  border-radius: var(--radius);
+  margin-top: 8px;
+  padding: 0;
+  background: linear-gradient(180deg, rgba(20,29,50,.25), rgba(17,26,46,.35));
+}
+
+[data-win]{
+  position: absolute;
+  user-select: none;
+  width: 520px;
+  min-width: 320px;
+  min-height: 160px;
+}
+[data-win].dragging{ opacity:.9; box-shadow: 0 0 0 2px rgba(59,130,246,.35), var(--shadow-1) }
+[data-win] .win-title{
+  cursor: move;
+  display:flex; align-items:center; justify-content:space-between;
+}
+[data-win] .win-title h3{ cursor:move; }
+
+[data-win] .resize-handle{
+  position:absolute; right:6px; bottom:6px;
+  width:14px; height:14px; border-radius:4px;
+  border:1px solid var(--line);
+  background: rgba(255,255,255,.08);
+  cursor: se-resize;
+}
+
+/* When layout mode is active, hide the old two-column grid */
+.layout-active .grid{ display:none; }
+.layout-active #layout_canvas{ display:block; }
+
+@media (max-width: 720px){
+  .layout-canvas{ min-height: 1200px; }
+  [data-win]{ width: calc(100% - 24px); left:12px !important; }
+}
+
 
   </style>
 </head>
 <body>
   <h2>WMPS Control Panel</h2>
+<div class="layout-toolbar">
+  <button id="layout_toggle" class="btn-secondary">Customize Layout</button>
+  <button id="layout_reset" class="btn-ghost">Reset</button>
+  <span class="hint">Drag cards by the title bar, resize from the bottom-right corner. Changes are saved automatically.</span>
+</div>
+
+<div id="layout_canvas" class="layout-canvas" style="display:none;"></div>
+
+  
   <div class="grid">
 
-    <div class="card col-right">
-      <h3>Machines</h3>
-      <div id="machines_table" class="table-host"></div>
-    </div>
+  <!-- LEFT COLUMN STACK -->
+  <div class="col-stack left">
 
-
-    
-    <div class="card col-left">
+    <div class="card" id="card-users" data-win="users">
+      <div class="win-title">
   <h3>Add / Update User</h3>
-
-  <!-- user selector row -->
-  <div class="row">
-    <div>
-      <label>Select user</label>
-      <select id="u_select">
-        <option value="">New user</option>
-      </select>
-    </div>
-    <div style="display:flex; align-items:end; gap:8px;">
-      <button id="u_refresh" class="btn-secondary">Refresh users</button>
-      <button onclick="upsert()" id="u_save">Save</button>
-    </div>
-  </div>
-
-  <!-- form fields -->
-  <div class="row">
-      <label>Account ID</label><input id="u_code" placeholder="6-digit Account ID"/>
-      <label>Full name</label><input id="u_name" placeholder="Full name"/>
-  </div>
-
-  <div class="row">
-    <label>Current balance</label><input id="u_balance_current" value="0" readonly/>
-    <label>Top-up amount</label><input id="u_topup" placeholder="e.g. 25"/>
-  </div>
-
-  <!-- legacy button kept (hidden) so nothing breaks -->
-  <div style="margin-top:8px;">
-    <button id="u_list_legacy" style="display:none" onclick="listAccounts()">List Accounts</button>
-  </div>
-
-  <!-- table placeholder -->
-  <div id="user_error" class="error-banner" style="display:none"></div>
-  <div id="user_table" class="table-host"></div>
-
-  <!-- legacy JSON output kept but hidden to avoid breaking anything -->
-  <pre id="users" style="display:none">{{}}</pre>
 </div>
+<div class="resize-handle" aria-hidden="true" title="Resize"></div>
 
 
-    <div class="card col-right">
-  <h3>Settings</h3>
+      <!-- user selector row -->
+      <div class="row">
+        <div>
+          <label>Select user</label>
+          <select id="u_select">
+            <option value="">New user</option>
+          </select>
+        </div>
+        <div style="display:flex; align-items:end; gap:8px;">
+          <button id="u_refresh" class="btn-secondary">Refresh users</button>
+          <button onclick="upsert()" id="u_save">Save</button>
+        </div>
+      </div>
 
-  <!-- Machines -->
-  <div class="muted" style="margin:6px 0 -2px 2px;">Machines</div>
-  <div class="row">
-    <div>
-      <label>Washing machines (comma-separated)</label>
-      <input id="cfg_wm" placeholder="1,2,3"/>
+      <!-- form fields -->
+      <div class="row">
+        <label>Account ID</label><input id="u_code" placeholder="6-digit Account ID"/>
+        <label>Full name</label><input id="u_name" placeholder="Full name"/>
+      </div>
+
+      <div class="row">
+        <label>Current balance</label><input id="u_balance_current" value="0" readonly/>
+        <label>Top-up amount</label><input id="u_topup" placeholder="e.g. 25"/>
+      </div>
+
+      <!-- legacy button kept (hidden) so nothing breaks -->
+      <div style="margin-top:8px;">
+        <button id="u_list_legacy" style="display:none" onclick="listAccounts()">List Accounts</button>
+      </div>
+
+      <!-- table placeholder -->
+      <div id="user_error" class="error-banner" style="display:none"></div>
+      <div id="user_table" class="table-host"></div>
+
+      <!-- legacy JSON output kept but hidden to avoid breaking anything -->
+      <pre id="users" style="display:none">{{}}</pre>
     </div>
-    <div>
-      <label>Dryer machines (comma-separated)</label>
-      <input id="cfg_dm" placeholder="4,5,6"/>
-    </div>
-  </div>
 
-  <!-- Durations -->
-  <div class="row">
-    <div>
-      <label>Washing minutes</label>
-      <input id="cfg_wmin" placeholder="30"/>
-    </div>
-    <div>
-      <label>Dryer minutes</label>
-      <input id="cfg_dmin" placeholder="60"/>
-    </div>
-  </div>
-
-  <!-- Pricing -->
-  <div class="row">
-    <div>
-      <label>Price — Washing</label>
-      <input id="cfg_wp" placeholder="5"/>
-    </div>
-    <div>
-      <label>Price — Dryer</label>
-      <input id="cfg_dp" placeholder="5"/>
-    </div>
-  </div>
-
-  <!-- Disabled -->
-  <div class="row">
-    <div>
-      <label>Disabled machines (comma-separated)</label>
-      <input id="cfg_disabled" placeholder="e.g. 2,5"/>
-    </div>
-    <div></div>
-  </div>
-
-  <!-- Buttons -->
-  <div style="margin-top:8px;">
-    <button onclick="loadConfig()" class="btn-secondary">Load Settings</button>
-    <button onclick="saveConfig()" style="margin-left:8px;">Save Settings</button>
-  </div>
-
-  <!-- Compact table preview -->
-  <div id="cfg_table" class="table-host"></div>
-</div>
-
-
-
-    <div class="card col-left">
+    <div class="card" id="card-qc" data-win="qc">
+      <div class="win-title">
   <h3>Quick Charge</h3>
-
-  <div class="row">
-    <div>
-      <label>Account ID</label>
-      <input id="qc_tenant" placeholder="123456"/>
-    </div>
-    <div>
-      <label>Machine</label>
-      <select id="qc_machine">
-        <option value="">Select machine...</option>
-      </select>
-    </div>
-  </div>
-
-  <div class="row">
-    <div>
-      <label>Price (optional)</label>
-      <input id="qc_price" placeholder="leave blank for category/price_map"/>
-    </div>
-    <div>
-      <label>Minutes (optional)</label>
-      <input id="qc_minutes" placeholder="leave blank for default minutes"/>
-    </div>
-  </div>
-
-  <div style="margin-top:8px;">
-    <button onclick="simulateCharge()">Simulate/Charge</button>
-  </div>
-
-  <div id="qc_table" class="table-host"></div>
 </div>
+<div class="resize-handle" aria-hidden="true" title="Resize"></div>
 
-<div class="card col-left">
-      <h3>Transaction History</h3>
+
+      <div class="row">
+        <div>
+          <label>Account ID</label>
+          <input id="qc_tenant" placeholder="123456"/>
+        </div>
+        <div>
+          <label>Machine</label>
+          <select id="qc_machine">
+            <option value="">Select machine...</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>Price (optional)</label>
+          <input id="qc_price" placeholder="leave blank for category/price_map"/>
+        </div>
+        <div>
+          <label>Minutes (optional)</label>
+          <input id="qc_minutes" placeholder="leave blank for default minutes"/>
+        </div>
+      </div>
+
+      <div style="margin-top:8px;">
+        <button onclick="simulateCharge()">Simulate/Charge</button>
+      </div>
+
+      <div id="qc_table" class="table-host"></div>
+    </div>
+
+    <div class="card" id="card-history" data-win="history">
+      <div class="win-title">
+  <h3>Transaction History</h3>
+</div>
+<div class="resize-handle" aria-hidden="true" title="Resize"></div>
+
       <div id="history_wrap">
-  <table id="history">
-    <thead>
-      <tr>
-        <th>Time</th>
-        <th>Account ID</th>
-        <th>Machine</th>
-        <th>Charged</th>
-        <th>Balance After</th>
-        <th>Minutes</th>
-        <th>Success</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
-</div>
+        <table id="history">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Account ID</th>
+              <th>Machine</th>
+              <th>Charged</th>
+              <th>Balance After</th>
+              <th>Minutes</th>
+              <th>Success</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
       <div class="muted">Showing last 50 entries</div>
     </div>
 
-
-
-  <div class="card col-right">
-  <h3>CSV Files</h3>
-
- <div class="row">
-  <div class="dropdown" id="dl_box">
-    <button id="dl_btn" class="btn-xs">Download</button>
-    <div class="dropdown-content" id="dl_menu">
-      <a href="#" data-file="accounts">Accounts.csv</a>
-      <a href="#" data-file="transactions">Transactions.csv</a>
-    </div>
   </div>
-  <button class="btn-xs" onclick="uploadAuto()">Upload CSV</button>
+
+  <!-- RIGHT COLUMN STACK -->
+  <div class="col-stack right">
+
+    <div class="card" id="card-machines" data-win="machines">
+      <div class="win-title">
+  <h3>Machines</h3>
 </div>
+<div class="resize-handle" aria-hidden="true" title="Resize"></div>
 
+      <div id="machines_table" class="table-host"></div>
+    </div>
 
-  <div id="csv_table" class="table-host"></div>
+    <div class="card" id="card-settings" data-win="settings">
+      <div class="win-title">
+  <h3>Settings</h3>
 </div>
+<div class="resize-handle" aria-hidden="true" title="Resize"></div>
 
 
+      <!-- Machines -->
+      <div class="muted" style="margin:6px 0 -2px 2px;">Machines</div>
+      <div class="row">
+        <div>
+          <label>Washing machines (comma-separated)</label>
+          <input id="cfg_wm" placeholder="1,2,3"/>
+        </div>
+        <div>
+          <label>Dryer machines (comma-separated)</label>
+          <input id="cfg_dm" placeholder="4,5,6"/>
+        </div>
+      </div>
+
+      <!-- Durations -->
+      <div class="row">
+        <div>
+          <label>Washing minutes</label>
+          <input id="cfg_wmin" placeholder="30"/>
+        </div>
+        <div>
+          <label>Dryer minutes</label>
+          <input id="cfg_dmin" placeholder="60"/>
+        </div>
+      </div>
+
+      <!-- Pricing -->
+      <div class="row">
+        <div>
+          <label>Price — Washing</label>
+          <input id="cfg_wp" placeholder="5"/>
+        </div>
+        <div>
+          <label>Price — Dryer</label>
+          <input id="cfg_dp" placeholder="5"/>
+        </div>
+      </div>
+
+      <!-- Disabled -->
+      <div class="row">
+        <div>
+          <label>Disabled machines (comma-separated)</label>
+          <input id="cfg_disabled" placeholder="e.g. 2,5"/>
+        </div>
+        <div></div>
+      </div>
+
+      <!-- Buttons -->
+      <div style="margin-top:8px;">
+        <button onclick="loadConfig()" class="btn-secondary">Load Settings</button>
+        <button onclick="saveConfig()" style="margin-left:8px;">Save Settings</button>
+      </div>
+
+      <!-- Compact table preview -->
+      <div id="cfg_table" class="table-host"></div>
+    </div>
+
+    <div class="card" id="card-csv" data-win="csv">
+      <div class="win-title">
+  <h3>CSV Files</h3>
+</div>
+<div class="resize-handle" aria-hidden="true" title="Resize"></div>
+
+
+      <div class="row">
+        <div class="dropdown" id="dl_box">
+          <button id="dl_btn" class="btn-xs">Download</button>
+          <div class="dropdown-content" id="dl_menu">
+            <a href="#" data-file="accounts">Accounts.csv</a>
+            <a href="#" data-file="transactions">Transactions.csv</a>
+          </div>
+        </div>
+        <button class="btn-xs" onclick="uploadAuto()">Upload CSV</button>
+      </div>
+
+      <div id="csv_table" class="table-host"></div>
+    </div>
+
+  </div>
+
+</div>
 
 <script>
 function pill2(state, err) {
@@ -1886,7 +1992,7 @@ function renderSettingsTable(settings){
       <thead>
         <tr><th>Setting</th><th>Value</th></tr>
       </thead>
-      <tbody>
+      <tbody><>
         ${trs}
       </tbody>
     </table>
@@ -2505,6 +2611,214 @@ initUsersUI();
 })();
 
 </script>
+<script>
+/* ====== Freeform layout (drag + resize + persist) ====== */
+(function(){
+  const CANVAS = document.getElementById('layout_canvas');
+  const BTN_TOGGLE = document.getElementById('layout_toggle');
+  const BTN_RESET  = document.getElementById('layout_reset');
+  const LKEY = 'wmps.layout.v1';
+  let zCounter = 100;
+
+  function loadLayout(){
+    try { return JSON.parse(localStorage.getItem(LKEY) || '{}'); }
+    catch(_){ return {}; }
+  }
+  function saveLayout(state){
+    localStorage.setItem(LKEY, JSON.stringify(state || {}));
+  }
+
+  function defaultPositions(){
+    const W = CANVAS.clientWidth || 1200;
+    const col = Math.max(360, Math.min(560, Math.floor(W/2)-24));
+    return {
+      users:   { x: 12,      y: 12,         w: col, h: 340 },
+      qc:      { x: 12,      y: 12+352,     w: col, h: 260 },
+      history: { x: 12,      y: 12+352+272, w: col, h: 380 },
+      machines:{ x: 24+col,  y: 12,         w: col, h: 220 },
+      settings:{ x: 24+col,  y: 12+232,     w: col, h: 480 },
+      csv:     { x: 24+col,  y: 12+232+492, w: col, h: 260 }
+    };
+  }
+
+  function applyGeom(el, g){
+    if(!g) return;
+    el.style.left   = (g.x|0) + 'px';
+    el.style.top    = (g.y|0) + 'px';
+    el.style.width  = Math.max(320, g.w|0) + 'px';
+    el.style.height = Math.max(140, g.h|0) + 'px';
+  }
+
+  function collectCards(){
+    const wins = document.querySelectorAll('[data-win]');
+    wins.forEach(w => {
+      if (w.parentElement !== CANVAS){
+        CANVAS.appendChild(w);
+      }
+    });
+  }
+
+  function bringToFront(el){
+    zCounter += 1;
+    el.style.zIndex = String(zCounter);
+  }
+
+  function boundRect(g){
+    const pad = 6;
+    const W = CANVAS.clientWidth;
+    const H = CANVAS.clientHeight;
+    g.w = Math.max(320, Math.min(g.w, W - g.x - pad));
+    g.h = Math.max(140, Math.min(g.h, H - g.y - pad));
+    g.x = Math.max(pad, Math.min(g.x, W - 320));
+    g.y = Math.max(pad, Math.min(g.y, H - 100));
+    return g;
+  }
+
+  function initWin(el){
+    const id = el.getAttribute('data-win');
+    const title = el.querySelector('.win-title') || el;
+    const handle = el.querySelector('.resize-handle');
+
+    const gAll = loadLayout();
+    const g = gAll[id] || defaultPositions()[id];
+    applyGeom(el, g);
+
+    // Drag
+    let dx=0, dy=0, dragging=false;
+    function onDown(e){
+      dragging = true;
+      bringToFront(el);
+      el.classList.add('dragging');
+      const r = el.getBoundingClientRect();
+      const baseX = e.touches ? e.touches[0].clientX : e.clientX;
+      const baseY = e.touches ? e.touches[0].clientY : e.clientY;
+      dx = baseX - r.left;
+      dy = baseY - r.top;
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+      window.addEventListener('touchmove', onMove, {passive:false});
+      window.addEventListener('touchend', onUp);
+      e.preventDefault?.();
+    }
+    function onMove(e){
+      if(!dragging) return;
+      e.preventDefault?.();
+      const baseX = e.touches ? e.touches[0].clientX : e.clientX;
+      const baseY = e.touches ? e.touches[0].clientY : e.clientY;
+      const c = CANVAS.getBoundingClientRect();
+      let x = (baseX - c.left) - dx;
+      let y = (baseY - c.top)  - dy;
+      x = Math.round(x/10)*10;
+      y = Math.round(y/10)*10;
+      const cur = { x, y, w: el.offsetWidth, h: el.offsetHeight };
+      boundRect(cur);
+      applyGeom(el, cur);
+    }
+    function onUp(){
+      if(!dragging) return;
+      dragging = false;
+      el.classList.remove('dragging');
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onUp);
+      persist();
+    }
+    title.addEventListener('mousedown', onDown);
+    title.addEventListener('touchstart', onDown, {passive:false});
+
+    // Resize
+    if(handle){
+      let rx=0, ry=0, rw=0, rh=0, resizing=false;
+      function rDown(e){
+        resizing = true;
+        bringToFront(el);
+        const baseX = e.touches ? e.touches[0].clientX : e.clientX;
+        const baseY = e.touches ? e.touches[0].clientY : e.clientY;
+        rx = baseX; ry = baseY; rw = el.offsetWidth; rh = el.offsetHeight;
+        window.addEventListener('mousemove', rMove);
+        window.addEventListener('mouseup', rUp);
+        window.addEventListener('touchmove', rMove, {passive:false});
+        window.addEventListener('touchend', rUp);
+        e.preventDefault?.();
+      }
+      function rMove(e){
+        if(!resizing) return;
+        const baseX = e.touches ? e.touches[0].clientX : e.clientX;
+        const baseY = e.touches ? e.touches[0].clientY : e.clientY;
+        let w = rw + (baseX - rx);
+        let h = rh + (baseY - ry);
+        w = Math.round(w/10)*10;
+        h = Math.round(h/10)*10;
+        const cur = { x: el.offsetLeft, y: el.offsetTop, w, h };
+        boundRect(cur);
+        applyGeom(el, cur);
+      }
+      function rUp(){
+        if(!resizing) return;
+        resizing = false;
+        window.removeEventListener('mousemove', rMove);
+        window.removeEventListener('mouseup', rUp);
+        window.removeEventListener('touchmove', rMove);
+        window.removeEventListener('touchend', rUp);
+        persist();
+      }
+      handle.addEventListener('mousedown', rDown);
+      handle.addEventListener('touchstart', rDown, {passive:false});
+    }
+
+    function persist(){
+      const all = loadLayout();
+      all[id] = { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight };
+      saveLayout(all);
+    }
+  }
+
+  function activateLayout(){
+    document.body.classList.add('layout-active');
+    CANVAS.style.display = 'block';
+    collectCards();
+    const stored = loadLayout();
+    if (!Object.keys(stored).length){
+      saveLayout(defaultPositions());
+    }
+    document.querySelectorAll('[data-win]').forEach(el => initWin(el));
+    BTN_TOGGLE.textContent = 'Close Layout Mode';
+  }
+
+  function deactivateLayout(){
+    // If you prefer to return to the original two-column grid when closing:
+    // document.body.classList.remove('layout-active');
+    // CANVAS.style.display = 'none';
+    BTN_TOGGLE.textContent = 'Customize Layout';
+  }
+
+  BTN_TOGGLE.addEventListener('click', () => {
+    if (!document.body.classList.contains('layout-active')){
+      activateLayout();
+    } else {
+      deactivateLayout();
+    }
+  });
+
+  BTN_RESET.addEventListener('click', () => {
+    if (!confirm('Reset saved layout?')) return;
+    saveLayout({});
+    const def = defaultPositions();
+    document.querySelectorAll('[data-win]').forEach(el => {
+      const id = el.getAttribute('data-win');
+      applyGeom(el, def[id] || {x:12,y:12,w:520,h:260});
+    });
+    saveLayout(def);
+  });
+
+  // Auto-activate if a layout exists
+  if (localStorage.getItem(LKEY)){
+    activateLayout();
+  }
+})();
+</script>
+
 </body>
 </html>
 """)
