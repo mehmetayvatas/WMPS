@@ -1280,7 +1280,7 @@ def root_ui():
 }
 
 *{ box-sizing:border-box }
-html,body{ height:100% }
+
 body{
   margin:0; padding:24px;
   background:var(--bg); color:var(--text);
@@ -1364,12 +1364,16 @@ select:focus-visible{ border-color:var(--accent); box-shadow:var(--ring); backgr
 .dropdown-content {
   display: none;
   position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  padding: 6px 0;
   background: #0c1628;
   border: 1px solid var(--line);
   border-radius: var(--radius-xs);
   min-width: 160px;
   z-index: 10;
 }
+
 .dropdown-content a {
   color: #eaf1f8;
   padding: 8px 12px;
@@ -1419,6 +1423,12 @@ input, select{
   overflow:auto;
 }
 
+/* Override the generic table-host clamp for Settings table so it never scrolls */
+#cfg_table.table-host{
+  max-height:none;
+  overflow:visible;
+}
+
 .table-host thead th{
   text-transform: uppercase;
   letter-spacing:.02em;
@@ -1458,8 +1468,18 @@ button.btn-danger{ background:linear-gradient(180deg,#ef4444,#7f1d1d) }
 .muted{ color:#9fb2c6; font-size:12px }
 
 table{
-  width:100%; border-collapse:separate; border-spacing:0;
-  border:1px solid var(--line); background:#0c1628; border-radius:10px;
+  width:100%;
+  border-collapse:separate;
+  border-spacing:0;
+  background:#0c1628;
+}
+
+.table-host,
+#history_wrap,
+#machines_table,
+#cfg_table{
+  border:1px solid var(--line);
+  border-radius:10px;
   overflow:hidden;
 }
 thead th{
@@ -1474,7 +1494,7 @@ tbody td{
 tbody tr:nth-child(even){ background:rgba(255,255,255,.02) }
 tbody tr:hover{ background:#0f1a2b }
 
-#machines{ max-height:none; overflow:visible; padding:0; margin-top:6px; }
+#machines_table{ max-height:none; overflow:visible; padding:0; margin-top:6px; }
 #history_wrap{
   max-height: clamp(240px, 40vh, 480px); /* yaklaşık 10 satır sığar */
   overflow:auto;
@@ -1512,20 +1532,10 @@ html{
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
 
 
-#machines table{ border-radius:10px; background:#0c1628 }
-#machines thead th{ padding:10px; font-size:12px }
-#machines tbody td{ padding:8px 10px; font-size:13px }
-#machines tbody tr{ height:36px }
-
-#csv_card .row{
-  display:flex;
-  gap:8px;
-  flex-wrap:wrap;
-  align-items:center;
-  justify-content:flex-start;
-  margin:6px 0 4px 0;
-}
-#csv_card button{ white-space:nowrap; }
+#machines_table table{ background:#0c1628 }
+#machines_table thead th{ padding:10px; font-size:12px }
+#machines_table tbody td{ padding:8px 10px; font-size:13px }
+#machines_table tbody tr{ height:36px }
 
 @media (max-width:720px){
   .card{ padding:12px }
@@ -1565,10 +1575,6 @@ a:focus-visible{
 }
 
 /* ====== Draggable/Resizable layout (windowed cards) ====== */
-.layout-toolbar{
-  display:flex; gap:8px; align-items:center; margin:8px 0 12px 0;
-}
-.layout-toolbar .hint{ font-size:12px; color:var(--muted) }
 
 .layout-canvas{
   position: relative;
@@ -1582,17 +1588,24 @@ a:focus-visible{
 
 [data-win]{
   position: absolute;
-  user-select: none;
   width: 520px;
   min-width: 320px;
   min-height: 160px;
 }
-[data-win].dragging{ opacity:.9; box-shadow: 0 0 0 2px rgba(59,130,246,.35), var(--shadow-1) }
-[data-win] .win-title{
-  cursor: move;
-  display:flex; align-items:center; justify-content:space-between;
+
+[data-win].dragging{
+  opacity:.9;
+  box-shadow: 0 0 0 2px rgba(59,130,246,.35), var(--shadow-1);
 }
-[data-win] .win-title h3{ cursor:move; }
+
+[data-win] .win-title,
+[data-win] .win-title h3{
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: move;
+}
+
+[data-win] .win-title { touch-action: none; }
 
 [data-win] .resize-handle{
   position:absolute; right:6px; bottom:6px;
@@ -1601,6 +1614,7 @@ a:focus-visible{
   background: rgba(255,255,255,.08);
   cursor: se-resize;
 }
+
 
 /* When layout mode is active, hide the old two-column grid */
 .layout-active .grid{ display:none; }
@@ -1616,11 +1630,7 @@ html, body {
   min-height: 100%;
 }
 
-/* Override the generic table-host clamp for Settings table so it never scrolls */
-#cfg_table.table-host {
-  max-height: none !important;
-  overflow: visible !important;
-}
+
 
 /* (Opsiyonel) Users ve Machines tablolarını da tamamen göstermek istersen aç: */
 /*
@@ -1646,6 +1656,64 @@ html, body {
   font-size: 12px;
   white-space: nowrap;
 }
+
+html, body { min-height: 100%; height: auto; }
+body { padding-bottom: 40px; } /* en alta nefes payı */
+
+.card:last-child { margin-bottom: 12px; }
+
+.btn-split {
+  background: linear-gradient(180deg,var(--accent),var(--accent-2));
+  color:#fff; border:0;
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+  padding:9px 10px; cursor:pointer; box-shadow:var(--shadow-2);
+}
+.btn-main {
+  background: linear-gradient(180deg,var(--accent),var(--accent-2));
+  color:#fff; border:0;
+  border-radius: var(--radius-xs) 0 0 var(--radius-xs);
+  padding:9px 12px; cursor:pointer; box-shadow:var(--shadow-2);
+}
+.btn-group { display:inline-flex; align-items:center; }
+
+#card-csv .row {
+  display:flex; align-items:center; justify-content:space-between;
+  gap: 12px; margin: 6px 0 4px 0;
+}
+
+#card-users .row:first-of-type { align-items:center; }
+#u_refresh, #u_save { transform: translateY(-2px); }
+
+input.combobox {
+  width:100%; padding:10px 12px; border-radius:var(--radius-xs);
+  border:1px solid var(--line); background:#0c1628; color:#eaf1f8;
+  outline:none; transition: border-color .15s, box-shadow .15s, background .15s;
+}
+input.combobox:hover{ border-color:#35507b }
+input.combobox:focus-visible{ border-color:var(--accent); box-shadow:var(--ring); background:#0d1a30 }
+
+.combo{
+  position: relative; display:flex; align-items:stretch; gap:6px;
+}
+.combo > .combobox{ flex:1 1 auto; }
+.combo-caret{
+  background: linear-gradient(180deg,var(--accent),var(--accent-2));
+  color:#fff; border:0; border-radius: var(--radius-xs);
+  padding: 0 10px; min-width: 36px; height: 44px; cursor:pointer;
+  box-shadow: var(--shadow-2);
+}
+.combo-list{
+  position:absolute; left:0; right:0; top: calc(100% + 6px);
+  background:#0c1628; border:1px solid var(--line); border-radius:10px;
+  max-height: 240px; overflow:auto; z-index:20; display:none;
+  box-shadow: var(--shadow-1);
+}
+.combo-list.open{ display:block; }
+.combo-item{
+  padding:8px 10px; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.combo-item:hover, .combo-item.active{ background:#0f1a2b; }
+.combo-empty{ padding:8px 10px; color:var(--muted); }
 
   </style>
 </head>
@@ -1676,10 +1744,12 @@ html, body {
       <!-- user selector row -->
       <div class="row">
         <div>
-          <label>Select user</label>
-          <select id="u_select">
-            <option value="">New user</option>
-          </select>
+         <label>Select user</label>
+<div class="combo" id="u_combo">
+  <input id="u_select" class="combobox" placeholder="New user or search..." autocomplete="off" />
+  <button type="button" id="u_select_caret" class="combo-caret" aria-label="Open">▾</button>
+  <div id="u_combo_list" class="combo-list" role="listbox" aria-expanded="false"></div>
+</div>
         </div>
         <div style="display:flex; align-items:end; gap:8px;">
           <button id="u_refresh" class="btn-secondary">Refresh users</button>
@@ -1859,15 +1929,17 @@ html, body {
 
 
       <div class="row">
-        <div class="dropdown" id="dl_box">
-          <button id="dl_btn" class="btn-xs">Download</button>
-          <div class="dropdown-content" id="dl_menu">
-            <a href="#" data-file="accounts">Accounts.csv</a>
-            <a href="#" data-file="transactions">Transactions.csv</a>
-          </div>
-        </div>
-        <button class="btn-xs" onclick="uploadAuto()">Upload CSV</button>
-      </div>
+  <div class="dropdown btn-group" id="dl_box">
+    <button id="dl_btn_main" class="btn-main">Download</button>
+    <button id="dl_btn_caret" class="btn-split" aria-label="More">▾</button>
+    <div class="dropdown-content" id="dl_menu">
+      <a href="#" data-file="accounts">Accounts.csv</a>
+      <a href="#" data-file="transactions">Transactions.csv</a>
+    </div>
+  </div>
+  <button class="" onclick="uploadAuto()">Upload CSV</button>
+</div>
+
 
       <div id="csv_table" class="table-host"></div>
     </div>
@@ -2125,23 +2197,19 @@ function sortedUserEntries() {
   return Object.entries(USERS_CACHE).sort((a,b)=> a[0].localeCompare(b[0]));
 }
 
-function populateUserSelect(selectedCode="") {
-  const sel = document.getElementById('u_select');
-  if (!sel) return;
-  sel.innerHTML = '';
-  const optNew = document.createElement('option');
-  optNew.value = '';
-  optNew.textContent = 'New user';
-  sel.appendChild(optNew);
-  for (const [code, rec] of sortedUserEntries()) {
-    const o = document.createElement('option');
-    o.value = code;
-    const nm = (rec.name || '').trim();
-    o.textContent = nm ? `${code} — ${nm}` : `${code}`;
-    if (code === selectedCode) o.selected = true;
-    sel.appendChild(o);
+function populateUserSelect(selectedCode = "") {
+  // sadece başlangıç değerini gösterir; asıl listeyi showComboSuggestions üretir
+  const input = document.getElementById('u_select');
+  if (!input) return;
+
+  if (selectedCode) {
+    const rec = USERS_CACHE[selectedCode];
+    input.value = rec && rec.name ? `${selectedCode} — ${rec.name}` : selectedCode;
+  } else {
+    input.value = '';
   }
 }
+
 
 function clearFormForNew() {
   const codeEl = document.getElementById('u_code');
@@ -2219,22 +2287,140 @@ function renderUserTable(rec) {
 async function initUsersUI() {
   await fetchAccounts();
   populateUserSelect();
-  document.getElementById('u_select').addEventListener('change', (e)=>{
-    const code = e.target.value;
-    if (!code) clearFormForNew(); else fillFormFromCode(code);
+
+  const input = document.getElementById('u_select');
+  const caret = document.getElementById('u_select_caret');
+
+  // yazdıkça filtrele
+  input.addEventListener('input', () => showComboSuggestions(input.value));
+
+  // focus olunca öneri aç
+  input.addEventListener('focus', () => showComboSuggestions(input.value));
+
+  // klavye ile gezinme/ seçim
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); navigateCombo(+1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); navigateCombo(-1); }
+    else if (e.key === 'Enter') {
+      const box = document.getElementById('u_combo_list');
+      const act = box && box.querySelector('.combo-item.active');
+      if (act) { e.preventDefault(); pickComboValue(act.dataset.code); }
+      else {
+        // elle yazılan bir kod olabilir
+        const code = parseCodeFromInput(input.value);
+        if (code) pickComboValue(code);
+      }
+    } else if (e.key === 'Escape') {
+      closeComboList();
+    }
   });
+
+  // caret tıkla → aç/kapat
+  caret.addEventListener('click', (e) => {
+    e.preventDefault();
+    const box = document.getElementById('u_combo_list');
+    if (box.classList.contains('open')) closeComboList(); else showComboSuggestions('');
+    input.focus();
+  });
+
+  // dışarı tıklama → kapat
+  document.addEventListener('click', (e) => {
+    const wrap = document.getElementById('u_combo');
+    if (wrap && !wrap.contains(e.target)) closeComboList();
+  });
+
+  // Refresh → listeyi güncelle
   document.getElementById('u_refresh').addEventListener('click', async ()=>{
     await fetchAccounts();
-    const current = document.getElementById('u_select').value;
-    populateUserSelect(current);
-    if (current) fillFormFromCode(current); else clearFormForNew();
+    populateUserSelect(parseCodeFromInput(input.value));
+    showComboSuggestions(input.value);
   });
-  // initial: New user
+
   clearFormForNew();
 }
 
+
+function buildComboHTML(items){
+  if (!items.length) return `<div class="combo-empty">No results</div>`;
+  return items.map(([code, rec], idx) => {
+    const name = (rec.name || '').trim();
+    const label = name ? `${code} — ${name}` : code;
+    return `<div class="combo-item" role="option" data-code="${code}" data-idx="${idx}">${label}</div>`;
+  }).join('');
+}
+
+// input değerine göre öneri göster
+function showComboSuggestions(query=''){
+  const box   = document.getElementById('u_combo_list');
+  const input = document.getElementById('u_select');
+  if (!box || !input) return;
+
+  const q = String(query || input.value || '').trim().toLowerCase();
+  const all = sortedUserEntries();
+  const filtered = q
+    ? all.filter(([code, rec]) => {
+        const name = (rec.name || '').toLowerCase();
+        return code.toLowerCase().includes(q) || name.includes(q);
+      })
+    : all.slice(0, 50); // boşsa ilk 50
+
+  box.innerHTML = buildComboHTML(filtered);
+  box.classList.add('open');
+  box.setAttribute('aria-expanded','true');
+
+  // Mouse ile seçim
+  box.querySelectorAll('.combo-item').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const code = el.dataset.code;
+      pickComboValue(code);
+    });
+  });
+
+  // İlk öğeyi aktif işaretle (klavye için)
+  setActiveComboIndex(0);
+}
+
+let _comboActiveIndex = -1;
+function setActiveComboIndex(idx){
+  const box = document.getElementById('u_combo_list');
+  if (!box) return;
+  const items = box.querySelectorAll('.combo-item');
+  items.forEach(el => el.classList.remove('active'));
+  if (!items.length) { _comboActiveIndex = -1; return; }
+  _comboActiveIndex = Math.max(0, Math.min(idx, items.length - 1));
+  items[_comboActiveIndex].classList.add('active');
+  // görünür tut
+  const el = items[_comboActiveIndex];
+  const top = el.offsetTop, bottom = top + el.offsetHeight;
+  if (box.scrollTop > top) box.scrollTop = top;
+  else if (box.scrollTop + box.clientHeight < bottom) box.scrollTop = bottom - box.clientHeight;
+}
+
+function navigateCombo(dir){ // dir: +1 / -1
+  const box = document.getElementById('u_combo_list');
+  if (!box || !box.classList.contains('open')) return;
+  setActiveComboIndex(_comboActiveIndex + dir);
+}
+
+function pickComboValue(code){
+  const input = document.getElementById('u_select');
+  const box = document.getElementById('u_combo_list');
+  const rec = USERS_CACHE[code];
+  input.value = rec && rec.name ? `${code} — ${rec.name}` : code;
+  closeComboList();
+  if (USERS_CACHE[code]) fillFormFromCode(code); else clearFormForNew();
+}
+
+function closeComboList(){
+  const box = document.getElementById('u_combo_list');
+  if (!box) return;
+  box.classList.remove('open');
+  box.setAttribute('aria-expanded','false');
+}
+
+
 async function upsert() {
-  const selCode = document.getElementById('u_select').value;
+  const selCode = parseCodeFromInput(document.getElementById('u_select').value);
   const codeEl = document.getElementById('u_code');
   const nameEl = document.getElementById('u_name');
   const balCurEl = document.getElementById('u_balance_current');
@@ -2603,24 +2789,43 @@ async function uploadAuto() {
 
 
 
-async function refresh() { await renderMachines(); await renderHistory(); }
-refresh(); loadConfig();
+async function refresh() {
+  await renderMachines();
+  await renderHistory();
+  // UI boyu güncel kalsın
+  if (typeof fitCanvasToCards === 'function') {
+    setTimeout(fitCanvasToCards, 0);
+    setTimeout(fitCanvasToCards, 120);
+  }
+}
+refresh();
+loadConfig();
 initUsersUI();
 
-(function(){
-  function initDownloadMenu(){
-    const box  = document.getElementById('dl_box');
-    const btn  = document.getElementById('dl_btn');
-    const menu = document.getElementById('dl_menu');
-    if (!box || !btn || !menu) return;
+(function () {
+  function initDownloadMenu() {
+    const box      = document.getElementById('dl_box');        // .btn-group + .dropdown
+    const btnMain  = document.getElementById('dl_btn_main');   // "Download"
+    const btnCaret = document.getElementById('dl_btn_caret');  // "▾"
+    const menu     = document.getElementById('dl_menu');       // dropdown list
+    if (!box || !btnMain || !btnCaret || !menu) return;
 
+    const open  = () => box.classList.add('open');
     const close = () => box.classList.remove('open');
 
-    btn.addEventListener('click', (e) => {
+    // Ana buton: varsayılan indirme (Accounts)
+    btnMain.addEventListener('click', (e) => {
+      e.preventDefault();
+      window.location.href = './download?file=accounts';
+    });
+
+    // Ok butonu menüyü aç/kapat
+    btnCaret.addEventListener('click', (e) => {
       e.preventDefault();
       box.classList.toggle('open');
     });
 
+    // Menü seçimleri
     menu.addEventListener('click', (e) => {
       const a = e.target.closest('a');
       if (!a) return;
@@ -2630,13 +2835,9 @@ initUsersUI();
       close();
     });
 
-    document.addEventListener('click', (e) => {
-      if (!box.contains(e.target)) close();
-    });
-
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') close();
-    });
+    // Dışarı tıklama & Esc ile kapat
+    document.addEventListener('click', (e) => { if (!box.contains(e.target)) close(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
   }
 
   if (document.readyState === 'loading') {
