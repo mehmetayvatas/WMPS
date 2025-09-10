@@ -1289,39 +1289,46 @@ body{
 }
 
 h2{
-  margin:4px auto 20px auto; max-width:1280px;
+  margin:4px 0 20px 0;
   font-weight:800; letter-spacing:.2px;
 }
 
 .grid{
   display:grid;
-  grid-template-columns: 1.6fr 1fr; /* left wider */
-  grid-auto-rows: auto;
-  grid-auto-flow: row dense;
+  grid-template-columns: 1fr 560px;
+  grid-auto-rows:auto;
+  grid-auto-flow:row dense;
   gap:12px;
   align-items:start;
-  max-width:1280px; margin:0 auto;
+  width:100%;
+  margin:0;          
 }
 
 
+
 /* Desktop placement */
-.grid > .card:nth-of-type(3){ grid-column:1; grid-row:1; }           /* Add / Update User */
-.grid > .card:nth-of-type(1){ grid-column:2; grid-row:1; }           /* Machines (compact) */
-.grid > .card:nth-of-type(4){ grid-column:2; grid-row:2; }           /* Settings under Machines */
-.grid > .card:nth-of-type(5){ grid-column:1; grid-row:2; }           /* Quick Charge under Add/Update */
-.grid > .card:nth-of-type(6){ grid-column:2; grid-row:3; }           /* CSV under Settings */
-.grid > .card:nth-of-type(2){ grid-column:1 / -1; grid-row:4; }      /* Transaction History full width */
+/* Desktop placement (right column fixed) */
+.grid > .card:nth-of-type(3){ grid-column:1; grid-row:1; } /* Add / Update */
+.grid > .card:nth-of-type(5){ grid-column:1; grid-row:2; } /* Quick Charge */
+.grid > .card:nth-of-type(2){ grid-column:1; grid-row:3; } /* Transaction History */
+
+.grid > .card:nth-of-type(1){ grid-column:2; grid-row:1; } /* Machines */
+.grid > .card:nth-of-type(4){ grid-column:2; grid-row:2; } /* Settings */
+.grid > .card:nth-of-type(6){ grid-column:2; grid-row:3; } /* CSV */
+
 
 
 @media (max-width:1024px){
   .grid{ grid-template-columns:1fr; }
   .grid > .card:nth-of-type(3){ grid-column:1; grid-row:1; } /* Add/Update */
   .grid > .card:nth-of-type(5){ grid-column:1; grid-row:2; } /* Quick Charge */
-  .grid > .card:nth-of-type(1){ grid-column:1; grid-row:3; } /* Machines */
-  .grid > .card:nth-of-type(4){ grid-column:1; grid-row:4; } /* Settings */
-  .grid > .card:nth-of-type(6){ grid-column:1; grid-row:5; } /* CSV */
-  .grid > .card:nth-of-type(2){ grid-column:1; grid-row:6; } /* History */
+  .grid > .card:nth-of-type(2){ grid-column:1; grid-row:3; } /* History */
+  .grid > .card:nth-of-type(1){ grid-column:1; grid-row:4; } /* Machines */
+  .grid > .card:nth-of-type(4){ grid-column:1; grid-row:5; } /* Settings */
+  .grid > .card:nth-of-type(6){ grid-column:1; grid-row:6; } /* CSV */
 }
+
+
 
 
 .card{
@@ -1428,8 +1435,8 @@ input, select{
 }
 
 #machines_table{
-  max-height: none;
-  overflow: visible;
+  max-height:none;
+  overflow:visible;
 }
 
 .table-host thead th{
@@ -2430,10 +2437,13 @@ async function uploadAuto() {
 
     const buf = await file.arrayBuffer();
 
-    const res = await fetch('./upload_auto', {
-      method: 'PUT',
-      body: buf
-    });
+    let targetHint = '';
+    const lower = (file.name || '').toLowerCase();
+    if (lower.includes('account')) targetHint = 'accounts';
+    else if (lower.includes('trans')) targetHint = 'transactions';
+
+    const url = './upload_auto' + (targetHint ? `?target=${targetHint}` : '');
+    const res = await fetch(url, { method: 'PUT', body: buf });
 
     if (!res.ok) {
       const txt = await res.text();
@@ -2786,6 +2796,12 @@ async def upload_raw(
     """
     Accept a raw CSV (bytes). If 'target' is omitted, auto-detect which CSV it is
     by inspecting the header. Write atomically under /data and mirror to /share/wmps.
+
+    Changes:
+      - Max size 15MB
+      - Auto-detect is lenient:
+          accounts: (tenant_code|customer_id) AND (balance|amount)
+          transactions: timestamp AND tenant_code AND (machine_number|machine)
     """
     ensure_bootstrap_files()
 
@@ -2793,7 +2809,7 @@ async def upload_raw(
     body = await request.body()
     if not body:
         raise HTTPException(status_code=400, detail="EMPTY_BODY")
-    if len(body) > 5 * 1024 * 1024:
+    if len(body) > 15 * 1024 * 1024:  # ↑ 15MB
         raise HTTPException(status_code=413, detail="FILE_TOO_LARGE")
 
     # Normalize text: strip UTF-8 BOM and unify newlines
@@ -2804,19 +2820,21 @@ async def upload_raw(
 
     header = lines[0].strip().lower()
 
-    # --- auto-detect if needed ---
-    detected: str | None = None
+    # --- helpers for header checks ---
     def has_all(cols: list[str]) -> bool:
         return all(col in header for col in cols)
 
+    def has_any(cols: list[str]) -> bool:
+        return any(col in header for col in cols)
+
+    # --- auto-detect if needed (more tolerant) ---
     if target is None:
-        if has_all(["tenant_code", "balance", "last_transaction_utc"]):
-            detected = "accounts"
-        elif has_all(["timestamp", "tenant_code", "machine_number"]):
-            detected = "transactions"
+        if (has_any(["tenant_code", "customer_id"]) and has_any(["balance", "amount"])):
+            target = "accounts"
+        elif (has_all(["timestamp", "tenant_code"]) and has_any(["machine_number", "machine"])):
+            target = "transactions"
         else:
             raise HTTPException(status_code=400, detail="UNKNOWN_CSV_FORMAT")
-        target = detected
 
     # --- choose paths ---
     path = ACCOUNTS_PATH if target == "accounts" else TRANSACTIONS_PATH
@@ -2824,10 +2842,10 @@ async def upload_raw(
 
     # --- light header validation (prevent wrong file overwrite) ---
     if target == "accounts":
-        if not has_all(["tenant_code", "balance"]):
+        if not (has_any(["tenant_code", "customer_id"]) and has_any(["balance", "amount"])):
             raise HTTPException(status_code=400, detail="INVALID_ACCOUNTS_HEADER")
     else:  # transactions
-        if not has_all(["timestamp", "tenant_code", "machine_number"]):
+        if not (has_all(["timestamp", "tenant_code"]) and has_any(["machine_number", "machine"])):
             raise HTTPException(status_code=400, detail="INVALID_TRANSACTIONS_HEADER")
 
     # --- atomic write with backup + mirror ---
@@ -2854,6 +2872,7 @@ async def upload_raw(
             _mirror(TRANSACTIONS_PATH, SHARE_TX)
 
     return {"ok": True, "target": target, "bytes": len(data_bytes)}
+
 
 @app.put("/upload_auto")
 async def upload_auto(
