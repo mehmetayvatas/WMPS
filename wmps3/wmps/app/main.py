@@ -157,11 +157,15 @@ def ensure_bootstrap_files() -> None:
             "simulate": True,
             "tts_service": "tts.google_translate_say",
             "media_player": "media_player.vlc_telnet",
+            "tts_language": "",  # optional, speak() kullanıyor
 
             # keypad
             "keypad_source": "ha",  # ha|evdev|auto
             "ha_ws_url": None,      # derive from ha_url if None
             "ha_event_type": "keyboard_remote_command_received",
+
+            "ignore_keys": [69, 58, 70],
+            "confirm_keys": [],
 
             # ADAM-6050 defaults
             "adam_host": "192.168.1.101",
@@ -171,8 +175,8 @@ def ensure_bootstrap_files() -> None:
             "pulse_seconds": 0.8,
             "invert_di": False,
             "activation_confirm_timeout_s": 15,
-            "min_restart_interval_s": 15,   # NEW: minimum restart interval in seconds
-            "idempotency_window_s": 30,     # NEW: idempotency window in seconds
+            "min_restart_interval_s": 15,   # minimum restart interval in seconds
+            "idempotency_window_s": 30,     # idempotency window in seconds
 
             "washing_machines": [1, 2, 3],
             "dryer_machines": [4, 5, 6],
@@ -193,7 +197,6 @@ def ensure_bootstrap_files() -> None:
         }
         OPTIONS_PATH.write_text(json.dumps(default, indent=2), encoding="utf-8")
         _log("INFO", "Created /data/options.json with defaults")
-
 
 # ----------------------- Locks ---------------------------
 @contextmanager
@@ -1043,42 +1046,102 @@ class KeypadStateMachine:
 
 # Key mapping helpers
 _MAIN_ROW_NUM = {2: "1", 3: "2", 4: "3", 5: "4", 6: "5", 7: "6", 8: "7", 9: "8", 10: "9", 11: "0"}  # KEY_1..KEY_0
-_KP_NUM = {79: "1", 80: "2", 81: "3", 75: "4", 76: "5", 77: "6", 71: "7", 72: "8", 73: "9", 82: "0"}  # KP1..KP0
+_KP_NUM       = {79: "1", 80: "2", 81: "3", 75: "4", 76: "5", 77: "6", 71: "7", 72: "8", 73: "9", 82: "0"}  # KP1..KP0
 
 def _map_keycode_name(name: str) -> Optional[str]:
-    
+    """
+    Evdev isimlerine göre mapping:
+      - Num/Caps/Scroll lock'ları yut (None)
+      - ENTER/KPENTER/HASHTAG -> "ENTER"
+      - ESC/BACKSPACE/DELETE/DEL/TAB/INS -> "CANCEL"
+      - HOME/UP/PAGEUP/LEFT/RIGHT/END/DOWN/PAGEDOWN/INSERT -> 7/8/9/4/6/1/2/3/0 (NumLock kapalı varyant)
+      - KP0..KP9 -> "0".."9", üst sıra rakamlar -> "0".."9"
+    """
     if not name:
         return None
     k = name
     if k.startswith("KEY_"):
         k = k[4:]
-    if k in ("ENTER", "KPENTER"):
+
+    # Kilit tuşlarını tamamen yut
+    if k in ("NUMLOCK", "CAPSLOCK", "SCROLLLOCK", "NUM_LOCK", "CAPS_LOCK", "SCROLL_LOCK"):
+        return None
+
+    if k in ("ENTER", "KPENTER", "HASHTAG"):
         return "ENTER"
-    
+
+    # İptal tuşları
     if k in ("KPASTERISK", "ESC", "BACKSPACE", "DELETE", "DEL", "TAB", "INS"):
         return "CANCEL"
-    if k in ("HASHTAG",):
-        return "ENTER"
+
+    # NumLock kapalı iken gelen NAV -> rakam zorlaması
+    nav_map = {
+        "HOME": "7", "UP": "8", "PAGEUP": "9",
+        "LEFT": "4",              "RIGHT": "6",
+        "END":  "1", "DOWN": "2", "PAGEDOWN": "3",
+        "INSERT": "0",
+    }
+    if k in nav_map:
+        return nav_map[k]
+
+    # KP0..KP9
     if k.startswith("KP") and len(k) == 3 and k[2].isdigit():
         return k[2]
+
+    # Üst sıra rakamları
     if len(k) == 1 and k.isdigit():
         return k
+
+    # F tuşları vs. yut
     if len(k) == 2 and k[0] == "F" and k[1].isdigit():
         return None
     return None
 
+
 def _map_keycode_int(code: int) -> Optional[str]:
+    """
+    Evdev sayısal keycode'larına göre mapping:
+      - Kilit tuş kodları (69/58/70) -> None (yut)
+      - NAV -> rakam (NumLock kapalı varyantları)
+      - Üst sıra/KP rakamları -> "0".."9"
+      - Enter -> "ENTER"
+      - Esc/Backspace/Delete/Tab -> "CANCEL"
+      - '#' -> "ENTER"
+    """
+    # Kilit tuş kodlarını yut (log spamını da önlemek için)
+    if code in (69, 58, 70):  # NumLock, CapsLock, ScrollLock
+        return None
+
+    # NAV → rakam
+    _NAV_NUM = {
+        102: "7",  # HOME
+        103: "8",  # UP
+        104: "9",  # PAGEUP
+        105: "4",  # LEFT
+        106: "6",  # RIGHT
+        107: "1",  # END
+        108: "2",  # DOWN
+        109: "3",  # PAGEDOWN
+        110: "0",  # INSERT
+        # 111 (DELETE) -> CANCEL, aşağıda
+    }
+    if code in _NAV_NUM:
+        return _NAV_NUM[code]
+
     if code in _MAIN_ROW_NUM:
         return _MAIN_ROW_NUM[code]
     if code in _KP_NUM:
         return _KP_NUM[code]
+
     if code in (28, 96):  # Enter, KP_Enter
         return "ENTER"
-    
+
     if code in (1, 14, 111, 15):  # Esc, Backspace, Delete, Tab -> cancel
         return "CANCEL"
-    if code in (43,):  # '#' fallback -> ENTER
+
+    if code in (43,):  # '#'
         return "ENTER"
+
     return None
 
 
@@ -1090,6 +1153,7 @@ def _evdev_thread():
         return
 
     sm = KeypadStateMachine(opts_provider=_read_options, speak_fn=speak, handle_charge_fn=_handle_charge)
+    IGNORED_KEY_NAMES = {"KEY_NUMLOCK", "KEY_CAPSLOCK", "KEY_SCROLLLOCK", "NUMLOCK", "CAPSLOCK", "SCROLLLOCK"}
 
     while True:
         # Prefer explicitly configured device; otherwise scan /dev/input
@@ -1105,10 +1169,8 @@ def _evdev_thread():
                 _log("WARN", "No keypad input device found under /dev/input (will retry in 5s)")
                 time.sleep(5.0)
                 continue
-            else:
-                _log("INFO", f"Keypad(evdev) selected by scan: {path}")
+            _log("INFO", f"Keypad(evdev) selected by scan: {path}")
         else:
-            # If a by-id path is configured but missing, fall back to scan
             if not os.path.exists(path):
                 _log("WARN", f"Configured keypad_device not found: {path} (falling back to scan)")
                 path = _find_keypad_device()
@@ -1124,17 +1186,39 @@ def _evdev_thread():
             dev = InputDevice(path)
             dev_name = getattr(dev, "name", "unknown")
             _log("INFO", f"Keypad(evdev) listening on {path} ({dev_name})")
+            # İzolasyon (mümkünse)
+            try:
+                dev.grab()
+                _log("INFO", "Keypad(evdev) grabbed (events isolated)")
+            except Exception as e:
+                _log("WARN", f"Keypad(evdev) grab failed (non-fatal): {e}")
         except Exception as e:
             _log("WARN", f"Failed to open input device {path}: {e} (retry in 5s)")
             time.sleep(5.0)
             continue
 
+        # Opsiyonlardan ignore setini hazırla (yoksa 69/58/70 varsayılan)
+        try:
+            ignore_keys_cfg = opts_local.get("ignore_keys")
+            ikeys = set(int(x) for x in (ignore_keys_cfg if ignore_keys_cfg is not None else [69, 58, 70]))
+        except Exception:
+            ikeys = {69, 58, 70}
+
         try:
             for event in dev.read_loop():
+                # Sadece key-down (value==1)
                 if event.type != ecodes.EV_KEY or getattr(event, "value", None) != 1:
                     continue
 
-                # Try resolve by key name first (from evdev.categorize)
+                # Koda göre erken filtre (Num/Caps/Scroll)
+                try:
+                    ev_code = int(getattr(event, "code", -1))
+                except Exception:
+                    ev_code = -1
+                if ev_code in ikeys:
+                    continue
+
+                # İsimden çöz
                 sym = None
                 name = ""
                 try:
@@ -1142,60 +1226,51 @@ def _evdev_thread():
                     name = key.keycode if isinstance(key.keycode, str) else (
                         key.keycode[0] if isinstance(key.keycode, (list, tuple)) and key.keycode else ""
                     )
+                    if name in IGNORED_KEY_NAMES:
+                        continue
                     sym = _map_keycode_name(name)
                 except Exception:
                     name = ""
 
-                # Fallback: resolve by numeric code (main row / numpad / enter / cancel)
+                # Fallback: koda göre çöz (NAV→rakam/ENTER/CANCEL dahil)
                 if not sym:
                     try:
-                        sym = _map_keycode_int(int(event.code))
+                        sym = _map_keycode_int(ev_code)
                     except Exception:
                         sym = None
 
-                # Honor confirm_keys from options as extra ENTER codes
+                # Ek ENTER kodları (opsiyonel)
                 if not sym:
                     try:
                         ckeys = set(int(x) for x in (opts_local.get("confirm_keys") or []))
-                        if int(event.code) in ckeys:
+                        if ev_code in ckeys:
                             sym = "ENTER"
                     except Exception:
                         pass
 
-                # Debug trace
-                _log("DEBUG", f"evdev keydown code={event.code} name={name or '-'} -> {sym or '-'}")
+                _log("DEBUG", f"evdev keydown code={ev_code} name={name or '-'} -> {sym or '-'}")
 
-                # Human-friendly press log (always log something)
                 if sym:
                     human = {"ENTER": "Enter", "CANCEL": "Cancel"}.get(sym, sym)
                     _log("INFO", f"Pressed key {human} (evdev)")
+                    sm.on_sym(sym)
                 else:
-                    raw = name or f"code={event.code}"
+                    # Num/Caps/Scroll zaten yutuldu; kalan 'unmapped'ları düşük gürültüde tut
+                    raw = name or f"code={ev_code}"
                     _log("INFO", f"Pressed key {raw} (evdev) [unmapped]")
 
-                # Dispatch to state machine
-                if sym:
-                    sm.on_sym(sym)
-
         except OSError as e:
-            # Device may have been unplugged; loop to reopen
             _log("WARN", f"Keypad(evdev) device error: {e} (will retry)")
-            try:
-                dev.close()
-            except Exception:
-                pass
+            try: dev.close()
+            except Exception: pass
             time.sleep(2.0)
             continue
         except Exception as e:
             _log("WARN", f"Keypad(evdev) loop exception: {e}\n{traceback.format_exc()}")
-            try:
-                dev.close()
-            except Exception:
-                pass
+            try: dev.close()
+            except Exception: pass
             time.sleep(2.0)
             continue
-
-
 
 def _find_keypad_device(patterns=("event*",)):
     try:
@@ -3744,7 +3819,8 @@ def get_config():
         "keypad_source","ha_ws_url","ha_event_type",
         "adam_host","adam_port","adam_unit_id","do_mode","pulse_seconds","invert_di",
         "activation_confirm_timeout_s",
-        "min_restart_interval_s","idempotency_window_s"
+        "min_restart_interval_s","idempotency_window_s",
+        "ignore_keys","confirm_keys"
     ]
     return {k: opts.get(k) for k in keys}
 
@@ -3758,6 +3834,12 @@ def set_config(payload: dict):
         patch["dryer_machines"] = [int(x) for x in patch["dryer_machines"]]
     if "disabled_machines" in patch:
         patch["disabled_machines"] = [int(x) for x in patch["disabled_machines"]]
+
+    if "ignore_keys" in patch:
+        patch["ignore_keys"] = [int(x) for x in patch["ignore_keys"]]
+    if "confirm_keys" in patch:
+        patch["confirm_keys"] = [int(x) for x in patch["confirm_keys"]]
+        
     opts.update(patch)
     _write_options(opts)
     return {"ok": True, "saved": patch}
