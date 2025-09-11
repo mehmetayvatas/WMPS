@@ -2269,34 +2269,40 @@ function renderQuickChargeResult(res) {
   if (!res || !res.ok) {
     host.innerHTML = `<div class="error-banner">Charge failed: ${(res && res.status) || 'ERROR'}</div>`;
     try { fitCanvasToCards(); } catch(_) {}
-
     return;
   }
 
-  const rows = `
-    <tr><td>Account ID</td><td>${res.account_id || ''}</td></tr>
-    <tr><td>Name</td><td>${res.name || ''}</td></tr>
-    <tr><td>Machine</td><td>${res.machine || ''}</td></tr>
-    <tr><td>Status</td><td style="color:${res.status === 'OK' ? '#4ade80' : '#f87171'}">${res.status}</td></tr>
-    ${res.charged != null ? `<tr><td>Charged</td><td>${res.charged}</td></tr>` : ''}
-    ${res.balance_before != null ? `<tr><td>Balance before</td><td>${res.balance_before}</td></tr>` : ''}
-    ${res.balance_after  != null ? `<tr><td>Balance after</td><td>${res.balance_after}</td></tr>` : ''}
-    ${res.cycle_minutes  != null ? `<tr><td>Minutes</td><td>${res.cycle_minutes}</td></tr>` : ''}
-  `;
+  const cells = [
+    ['Account ID', res.account_id || ''],
+    ['Name',        res.name || ''],
+    ['Machine',     res.machine || ''],
+    ['Status',      res.status || ''],
+    ['Charged',     res.charged != null ? formatMoney(res.charged) : ''],
+    ['Balance before', res.balance_before != null ? formatMoney(res.balance_before) : ''],
+    ['Balance after',  res.balance_after  != null ? formatMoney(res.balance_after)  : ''],
+    ['Minutes',        res.cycle_minutes  != null ? String(res.cycle_minutes)      : '']
+  ];
+
+  const thead = cells.map(([label]) => `<th>${label}</th>`).join('');
+  const tds = cells.map(([label, value]) => {
+    if (label === 'Status') {
+      const color = (res.status === 'OK' ? '#4ade80' : '#f87171');
+      return `<td style="color:${color}">${value}</td>`;
+    }
+    return `<td>${value}</td>`;
+  }).join('');
 
   host.innerHTML = `
     <table>
-      <thead>
-        <tr><th>Field</th><th>Value</th></tr>
-      </thead>
-      <tbody>
-        ${rows}
-      </tbody>
+      <thead><tr>${thead}</tr></thead>
+      <tbody><tr>${tds}</tr></tbody>
     </table>
   `;
-  try { fitCanvasToCards(); } catch(_) {}
 
+  // içerik büyüyünce kart/sayfa otomatik uyum sağlasın
+  try { fitCanvasToCards(); } catch(_) {}
 }
+
 
 // --- formatting & validation helpers ---
 function parseCodeFromInput(value) {
