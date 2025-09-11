@@ -1519,8 +1519,8 @@ input, select{
 }
 
 .table-host{
-  max-height: clamp(160px, 32vh, 360px);
-  overflow:auto;
+  max-height: none;
+  overflow: visible;
 }
 
 /* Override the generic table-host clamp for Settings table so it never scrolls */
@@ -1594,7 +1594,6 @@ tbody td{
 tbody tr:nth-child(even){ background:rgba(255,255,255,.02) }
 tbody tr:hover{ background:#0f1a2b }
 
-#machines_table{ max-height:none; overflow:visible; padding:0; margin-top:6px; }
 #history_wrap{
   max-height: clamp(240px, 40vh, 480px); /* yaklaşık 10 satır sığar */
   overflow:auto;
@@ -1608,7 +1607,10 @@ tbody tr:hover{ background:#0f1a2b }
 }
 #history thead th{ position:sticky; top:0; z-index:1; background:#0f1a2b; }
 
-#users, #csv{ max-height: clamp(120px, 32vh, 320px); overflow:auto; margin-top:6px; }
+#users, #csv{
+  max-height: none;
+  overflow: visible;
+}
 
 *::-webkit-scrollbar{ height:10px; width:10px }
 *::-webkit-scrollbar-track{ background:transparent }
@@ -1678,12 +1680,18 @@ a:focus-visible{
 
 .layout-canvas{
   position: relative;
-  min-height: 900px;
+  min-height: 4000px; 
+  height: auto;       
   border:1px dashed var(--line);
   border-radius: var(--radius);
   margin-top: 8px;
   padding: 0;
   background: linear-gradient(180deg, rgba(20,29,50,.25), rgba(17,26,46,.35));
+}
+
+html, body {
+  min-height: 100%;
+  height: auto;
 }
 
 [data-win]{
@@ -2077,6 +2085,7 @@ async function renderMachines() {
     startMachineTicker();
   } catch (e) {
     host.innerHTML = `<div class="error-banner">Failed to load machines.</div>`;
+    try { fitCanvasToCards(); } catch(_) {}
     return;
   }
 }
@@ -2212,6 +2221,7 @@ function renderSettingsTable(settings){
       </tbody>
     </table>
   `;
+    try { fitCanvasToCards(); } catch(_) {}
 }
 
 function populateQuickChargeMachines(cfg) {
@@ -2258,6 +2268,8 @@ function renderQuickChargeResult(res) {
 
   if (!res || !res.ok) {
     host.innerHTML = `<div class="error-banner">Charge failed: ${(res && res.status) || 'ERROR'}</div>`;
+    try { fitCanvasToCards(); } catch(_) {}
+
     return;
   }
 
@@ -2282,6 +2294,8 @@ function renderQuickChargeResult(res) {
       </tbody>
     </table>
   `;
+  try { fitCanvasToCards(); } catch(_) {}
+
 }
 
 // --- formatting & validation helpers ---
@@ -2455,6 +2469,8 @@ function renderUserTable(rec) {
       </tbody>
     </table>
   `;
+  try { fitCanvasToCards(); } catch(_) {}
+
 }
 
 
@@ -3427,6 +3443,27 @@ if (document.readyState === 'loading') {
   }
 })();
 </script>
+
+<script>
+/* İçerik büyüdükçe kanvas/sayfa yüksekliğini güncelle */
+(function(){
+  function observeCards() {
+    if (!('ResizeObserver' in window)) return;
+    const ro = new ResizeObserver(() => {
+      try { fitCanvasToCards(); } catch(_) {}
+    });
+    document.querySelectorAll('.card').forEach(el => ro.observe(el));
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', observeCards);
+  } else {
+    observeCards();
+  }
+})();
+</script>
+
+
 <script>
 (function () {
   function genIdemKeyFromPayload(bodyObj) {
