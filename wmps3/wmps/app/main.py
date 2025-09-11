@@ -13,7 +13,7 @@ import shutil
 import socket
 import ssl
 import traceback
-
+from collections import deque
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -39,8 +39,7 @@ try:
 except Exception:
     _HAS_WS = False
 
-from fastapi import FastAPI, Query, HTTPException
-from starlette.requests import Request
+from fastapi import FastAPI, Query, HTTPException, Request, Body
 from starlette.responses import JSONResponse, PlainTextResponse, HTMLResponse, StreamingResponse
 
 # ----------------------- PATHS ---------------------------
@@ -64,6 +63,8 @@ TRANSACTIONS_HEADER = "timestamp,tenant_code,machine_number,amount_charged,balan
 ADAM_COIL_BASE = 16
 
 ACTIVE_UNTIL: Dict[str, float] = {}
+LAST_TRIGGER_AT: Dict[str, float] = {}
+IDEMPOTENCY_CACHE: Dict[str, float] = {}
 
 app = FastAPI(title="WMPS API", version="3.2.0")
 
@@ -131,15 +132,16 @@ def _ensure_file(path: Path, header: str) -> None:
     except Exception as e:
         _log("WARN", f"ensure_file failed for {path}: {e}")
 
-def _mirror(src: Path, dst: Path):
+def _mirror(src: Path, dst: Path) -> None:
+    """Mirror src file to dst (atomic best-effort)."""
     try:
         dst.parent.mkdir(parents=True, exist_ok=True)
-        data = src.read_bytes()
-        with dst.open("wb") as f:
-            f.write(data); f.flush(); os.fsync(f.fileno())
-        _log("INFO", f"Mirrored {src} -> {dst} ({len(data)} bytes)")
+        # Use copy2 to preserve mtime/metadata where possible
+        shutil.copy2(src, dst)
+        _log("INFO", f"Mirrored {src} -> {dst}")
     except Exception as e:
         _log("WARN", f"Mirror failed {src} -> {dst}: {e}")
+
 
 def ensure_bootstrap_files() -> None:
     _ensure_file(ACCOUNTS_PATH, ACCOUNTS_HEADER)
@@ -169,26 +171,29 @@ def ensure_bootstrap_files() -> None:
             "pulse_seconds": 0.8,
             "invert_di": False,
             "activation_confirm_timeout_s": 15,
+            "min_restart_interval_s": 15,   # NEW: minimum restart interval in seconds
+            "idempotency_window_s": 30,     # NEW: idempotency window in seconds
 
-            "washing_machines": [1,2,3],
-            "dryer_machines": [4,5,6],
+            "washing_machines": [1, 2, 3],
+            "dryer_machines": [4, 5, 6],
             "washing_minutes": 30,
             "dryer_minutes": 60,
             "price_washing": 5.0,
             "price_dryer": 5.0,
-            "price_map": {"1":5,"2":5,"3":5,"4":5,"5":5,"6":5},
+            "price_map": {"1": 5, "2": 5, "3": 5, "4": 5, "5": 5, "6": 5},
             "disabled_machines": [],
             "machines": [
-                {"id":1, "ha_switch":"switch.washer_1_control", "ha_sensor":"binary_sensor.washer_1_status", "relay":0, "di":0, "enabled": True},
-                {"id":2, "ha_switch":"switch.washer_2_control", "ha_sensor":"binary_sensor.washer_2_status", "relay":1, "di":1, "enabled": True},
-                {"id":3, "ha_switch":"switch.washer_3_control", "ha_sensor":"binary_sensor.washer_3_status", "relay":2, "di":2, "enabled": True},
-                {"id":4, "ha_switch":"switch.dryer_4_control",  "ha_sensor":"binary_sensor.dryer_4_status",  "relay":3, "di":3, "enabled": True},
-                {"id":5, "ha_switch":"switch.dryer_5_control",  "ha_sensor":"binary_sensor.dryer_5_status",  "relay":4, "di":4, "enabled": True},
-                {"id":6, "ha_switch":"switch.dryer_6_control",  "ha_sensor":"binary_sensor.dryer_6_status",  "relay":5, "di":5, "enabled": True}
+                {"id": 1, "ha_switch": "switch.washer_1_control", "ha_sensor": "binary_sensor.washer_1_status", "relay": 0, "di": 0, "enabled": True},
+                {"id": 2, "ha_switch": "switch.washer_2_control", "ha_sensor": "binary_sensor.washer_2_status", "relay": 1, "di": 1, "enabled": True},
+                {"id": 3, "ha_switch": "switch.washer_3_control", "ha_sensor": "binary_sensor.washer_3_status", "relay": 2, "di": 2, "enabled": True},
+                {"id": 4, "ha_switch": "switch.dryer_4_control",  "ha_sensor": "binary_sensor.dryer_4_status",  "relay": 3, "di": 3, "enabled": True},
+                {"id": 5, "ha_switch": "switch.dryer_5_control",  "ha_sensor": "binary_sensor.dryer_5_status",  "relay": 4, "di": 4, "enabled": True},
+                {"id": 6, "ha_switch": "switch.dryer_6_control",  "ha_sensor": "binary_sensor.dryer_6_status",  "relay": 5, "di": 5, "enabled": True}
             ]
         }
         OPTIONS_PATH.write_text(json.dumps(default, indent=2), encoding="utf-8")
         _log("INFO", "Created /data/options.json with defaults")
+
 
 # ----------------------- Locks ---------------------------
 @contextmanager
@@ -327,6 +332,7 @@ def write_accounts(accounts: Dict[str, Dict[str, Union[str, float]]]) -> None:
     os.replace(tmp, ACCOUNTS_PATH)
     _mirror(ACCOUNTS_PATH, SHARE_ACCOUNTS)
 
+
 def append_transaction(
     tenant_code: str,
     machine_number: str,
@@ -350,16 +356,20 @@ def append_transaction(
     _ensure_file(TRANSACTIONS_PATH, TRANSACTIONS_HEADER)
     with TRANSACTIONS_PATH.open("a", encoding="utf-8", newline="") as f:
         w = csv.writer(f); w.writerow(row); f.flush(); os.fsync(f.fileno())
+
     _mirror(TRANSACTIONS_PATH, SHARE_TX)
+
     _log("INFO", f"TX appended: {row}")
+
 
 def tail_transactions(n: int = 50) -> List[Dict[str, str]]:
     if not TRANSACTIONS_PATH.exists():
         return []
     with TRANSACTIONS_PATH.open("r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
-        rows = list(reader)[-n:]  # sadece son n kayıt
-    out = []
+        # Keep only the last n rows in memory, streaming through the file
+        rows = deque(reader, maxlen=n)
+    out: List[Dict[str, str]] = []
     for row in rows:
         out.append({
             "timestamp": row.get("timestamp", ""),
@@ -371,6 +381,7 @@ def tail_transactions(n: int = 50) -> List[Dict[str, str]]:
             "success": row.get("success", ""),
         })
     return out
+
 
 # ----------------------- TTS -----------------------------
 def speak(text: str):
@@ -534,23 +545,46 @@ def machine_enabled(mid: str, opts: dict) -> bool:
     return True
 
 def machine_is_available(mid: str, opts: dict) -> bool:
-    """Check machine availability.
+    """Check machine real availability (independent of simulate).
     Priority:
       1. ADAM DI if configured
       2. HA sensor
-      3. Simulated mode
     Rules:
       - DI True  => BUSY
       - DI False => AVAILABLE (clear soft timer)
       - HA 'on'  => BUSY
       - HA 'off'/'idle' => AVAILABLE (clear soft timer)
-      - 'unknown' => treated as busy unless simulate=True
-      - No token (simulate=False) => not available
+      - 'unknown' => NOT available
+    Additionally:
+      - Soft-busy (ACTIVE_UNTIL) blocks availability
+      - Cooldown (min_restart_interval_s vs LAST_TRIGGER_AT) blocks availability
     """
     if not machine_enabled(mid, opts):
         return False
 
     mid_s = str(mid)
+
+    # --- Soft-busy (timer) check ---
+    try:
+        active_until_map = globals().get("ACTIVE_UNTIL", {})
+        if time.time() < float(active_until_map.get(mid_s, 0)):
+            return False
+    except Exception:
+        pass
+
+    # --- Cooldown (anti re-trigger) check ---
+    try:
+        cooldown = float(opts.get("min_restart_interval_s") or 0)
+    except Exception:
+        cooldown = 0.0
+    if cooldown > 0:
+        try:
+            last_map = globals().get("LAST_TRIGGER_AT", {})
+            last_ts = float(last_map.get(mid_s, 0) or 0)
+        except Exception:
+            last_ts = 0.0
+        if last_ts > 0 and (time.time() - last_ts) < cooldown:
+            return False
 
     # --- ADAM DI path ---
     r, di = _machine_adam_mapping(mid_s, opts)
@@ -561,18 +595,11 @@ def machine_is_available(mid: str, opts: dict) -> bool:
         if di_state is False:
             # OFF confirmed -> clear soft-busy timer
             try:
-                ACTIVE_UNTIL.pop(mid_s, None)
+                active_until_map.pop(mid_s, None)
             except Exception:
                 pass
             return True
         # None -> unknown, fall back to HA
-
-    # --- Simulated/test mode ---
-    simulate = bool(opts.get("simulate", False))
-    token = _resolve_token(opts.get("ha_token"))
-
-    if not simulate and not token:
-        return False
 
     # --- HA sensor path ---
     _switch, sensor = _machine_entities(mid_s, opts)
@@ -580,7 +607,7 @@ def machine_is_available(mid: str, opts: dict) -> bool:
 
     if state in ("off", "false", "0", "idle"):
         try:
-            ACTIVE_UNTIL.pop(mid_s, None)
+            active_until_map.pop(mid_s, None)
         except Exception:
             pass
         return True
@@ -588,8 +615,39 @@ def machine_is_available(mid: str, opts: dict) -> bool:
     if state in ("on", "true", "1", "running"):
         return False
 
-    # For 'unknown' or unexpected states:
-    return True if simulate else False
+    # Unknown or unexpected -> not available
+    return False
+
+
+def _make_idempotency_key(tenant_code: str, machine: str, price: Optional[float], minutes: Optional[int]) -> str:
+    """
+    Create a deterministic idempotency key for a charge attempt.
+    Same tenant+machine+price+minutes within a short window = duplicate.
+    """
+    t = (str(tenant_code).strip(), str(machine).strip(), str(price if price is not None else ""), str(minutes if minutes is not None else ""))
+    return "|".join(t)
+
+
+def _check_and_commit_idempotency(key: str, opts: dict) -> None:
+    """
+    Reject duplicate attempts within idempotency_window_s; otherwise record the attempt.
+    Raises HTTP 409 if duplicate.
+    """
+    window = 30.0
+    try:
+        window = float(opts.get("idempotency_window_s") or 30.0)
+    except Exception:
+        pass
+
+    now = time.time()
+    last = float(IDEMPOTENCY_CACHE.get(key, 0.0) or 0.0)
+    if last and (now - last) < window:
+        # duplicate within window
+        raise HTTPException(status_code=409, detail="DUPLICATE_REQUEST")
+
+    IDEMPOTENCY_CACHE[key] = now
+
+
 
 def operate_machine(mid: str, minutes: Optional[int]) -> dict:
     opts = _read_options()
@@ -701,10 +759,11 @@ def operate_machine(mid: str, minutes: Optional[int]) -> dict:
     return {"ok": True, "confirmed": True}
 
 
-def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minutes: Optional[int], opts: dict) -> dict:
+def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minutes: Optional[int], opts: dict, idem_key: Optional[str] = None, simulate_only: bool = False) -> dict:
     """
     Core flow:
       - read options + accounts
+      - idempotency check
       - validate machine enabled & availability
       - resolve price/minutes defaults
       - pre-charge checks (tenant exists, balance)
@@ -718,6 +777,18 @@ def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minut
     machine = str(machine).strip()
     if not tenant_code or not machine:
         raise HTTPException(status_code=400, detail="INVALID_INPUT")
+
+    # --- Idempotency check (before heavy work) ---
+    if not simulate_only:
+        try:
+            key = idem_key or _make_idempotency_key(tenant_code, machine, price, minutes)
+            _check_and_commit_idempotency(key, opts)
+        except HTTPException:
+            # Re-raise duplicates as-is
+            raise
+        except Exception:
+            # Do not block on unexpected errors (fail-open)
+            pass
 
     if not machine_enabled(machine, opts):
         speak(f"Machine {machine} is currently disabled.")
@@ -740,10 +811,30 @@ def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minut
         bal_before = float(accounts.get(tenant_code, {}).get("balance", 0.0))
         if bal_before < p:
             speak("Insufficient balance.")
-            append_transaction(tenant_code, machine, 0.0, bal_before, bal_before, m, success=False)
+            if not simulate_only:
+                append_transaction(tenant_code, machine, 0.0, bal_before, bal_before, m, success=False)
             raise HTTPException(status_code=402, detail="INSUFFICIENT_FUNDS")
 
+
+
     simulate = bool(opts.get("simulate", False))
+    # In simulation-only mode, stop here with a dry-run result (no side effects)
+    if simulate_only:
+        # Announce via TTS for testing, but still no side effects on data/hardware
+        try:
+            speak(f"Machine {machine} would start now")
+        except Exception:
+            pass
+        return {
+            "ok": True,
+            "tenant_code": tenant_code,
+            "balance_before": bal_before,
+            "balance_after": bal_before,  # no deduction in simulation
+            "charged": p,
+            "machine": machine,
+            "cycle_minutes": m,
+            "message": "SIMULATION_OK"
+        }
 
     # Per-machine lock, then operate
     with file_lock(_machine_lock_path(machine), timeout=10.0):
@@ -751,9 +842,11 @@ def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minut
             speak(f"Machine {machine} is busy. Please choose another machine.")
             raise HTTPException(status_code=409, detail="MACHINE_BUSY")
 
+        # Trigger operation (hardware driver may internally honor simulate)
         activated = operate_machine(machine, m)
         ok = bool(activated and activated.get("ok"))
 
+        # If real activation failed (not simulate), record failure and abort
         if not ok and not simulate:
             with file_lock(GLOBAL_LOCK, timeout=10.0):
                 accounts = read_accounts()
@@ -761,9 +854,15 @@ def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minut
                 append_transaction(tenant_code, machine, 0.0, bal0, bal0, m, success=False)
             raise HTTPException(status_code=500, detail="ACTIVATION_FAILED")
 
+        # Schedule soft-busy window (prevents immediate retrigger)
         duration_s = int(m or 0) * 60
         if duration_s > 0:
             ACTIVE_UNTIL[machine] = time.time() + duration_s
+            # Cooldown stamp (applies to both real and simulate flows)
+            try:
+                LAST_TRIGGER_AT[str(machine)] = time.time()
+            except Exception:
+                pass
 
             mode = str(opts.get("do_mode") or "pulse").lower()
             adam_enabled = bool((opts.get("adam_host") or "").strip())
@@ -781,6 +880,7 @@ def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minut
                         pass
                 threading.Timer(duration_s, _auto_release).start()
 
+        # Balance adjustment + transaction under global lock
         with file_lock(GLOBAL_LOCK, timeout=10.0):
             accounts = read_accounts()
             if tenant_code not in accounts:
@@ -793,6 +893,7 @@ def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minut
                         _ha_call_service(url, token, "switch", "turn_off", {"entity_id": switch})
                 except Exception:
                     pass
+            # Clean fail if tenant disappeared mid-flight
                 ACTIVE_UNTIL.pop(machine, None)
                 raise HTTPException(status_code=404, detail="TENANT_NOT_FOUND")
 
@@ -815,8 +916,8 @@ def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minut
             accounts[tenant_code]["balance"] = bal_after
             accounts[tenant_code]["last_transaction_utc"] = datetime.now(timezone.utc).isoformat()
 
-            # success True yalnızca: activated (gerçek teyit) veya test modu (simulate=True) ise
-            success_ok = bool(ok or simulate)
+            # Success is ONLY when real confirmation AND not simulate
+            success_ok = bool(ok and (not simulate))
             append_transaction(tenant_code, machine, p, bal_before, bal_after, m, success=success_ok)
 
             write_accounts(accounts)
@@ -834,7 +935,6 @@ def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minut
         "cycle_minutes": m,
         "message": "CHARGE_OK" if (ok or simulate) else "CHARGE_PENDING"
     }
-
 
 # ----------------------- Keypad (EVDEV + HA WS) ----------
 # Minimal state machine: 6-digit code, then machine 1..6, then confirm
@@ -1812,9 +1912,10 @@ input.combobox:focus-visible{ border-color:var(--accent); box-shadow:var(--ring)
         </div>
       </div>
 
-      <div style="margin-top:8px;">
-        <button onclick="simulateCharge()">Simulate/Charge</button>
-      </div>
+     <div style="margin-top:8px;">
+      <button id="charge_btn" onclick="simulateCharge()">Simulate/Charge</button>
+    </div>
+
 
       <div id="qc_table" class="table-host"></div>
     </div>
@@ -1990,7 +2091,16 @@ function startMachineTicker() {
       if (!deadline) { td.textContent = ''; return; }
 
       const ms = deadline - now;
-      if (ms <= 0) { td.textContent = ''; td.removeAttribute('data-deadline'); return; }
+      if (ms <= 0) {
+          td.textContent = '';
+          const mid = td.getAttribute('data-mid');
+          if (mid && window.MACHINE_DEADLINES) {
+            delete window.MACHINE_DEADLINES[mid];
+          }
+          td.removeAttribute('data-deadline');
+          return;
+        }
+
 
       const total = Math.ceil(ms / 1000);
       const m = Math.floor(total / 60);
@@ -2077,6 +2187,8 @@ function buildSettingsKV(settings){
     ['Price — Washing', String(settings.price_washing ?? '')],
     ['Price — Dryer',   String(settings.price_dryer ?? '')],
     ['Disabled machines', _csvJoin(settings.disabled_machines ?? [])],
+    ['Min restart interval (s)', String(settings.min_restart_interval_s ?? '')],
+    ['Idempotency window (s)', String(settings.idempotency_window_s ?? '')],
   ];
 }
 
@@ -2090,12 +2202,12 @@ function renderSettingsTable(settings){
       <td>${(v === '' || v == null) ? '[empty]' : v}</td>
     </tr>
   `).join('');
-  host.innerHTML = `
+    host.innerHTML = `
     <table>
       <thead>
         <tr><th>Setting</th><th>Value</th></tr>
       </thead>
-      <tbody><>
+      <tbody>
         ${trs}
       </tbody>
     </table>
@@ -2105,21 +2217,40 @@ function renderSettingsTable(settings){
 function populateQuickChargeMachines(cfg) {
   const sel = document.getElementById('qc_machine');
   if (!sel) return;
+
+  // Fallback to defaults if missing/empty
+  const wmRaw = (cfg && Array.isArray(cfg.washing_machines) && cfg.washing_machines.length) ? cfg.washing_machines : [1, 2, 3];
+  const dmRaw = (cfg && Array.isArray(cfg.dryer_machines)   && cfg.dryer_machines.length)   ? cfg.dryer_machines   : [4, 5, 6];
+
+  // Normalize: to integers, unique, sorted
+  const norm = (arr) =>
+    Array.from(new Set(
+      (arr || []).map(n => parseInt(String(n), 10)).filter(n => Number.isFinite(n))
+    )).sort((a, b) => a - b);
+
+  const wm = norm(wmRaw);
+  const dm = norm(dmRaw);
+
   sel.innerHTML = '<option value="">Select machine...</option>';
 
-  (cfg.washing_machines || []).forEach(m => {
+  wm.forEach(m => {
     const opt = document.createElement('option');
     opt.value = String(m);
     opt.textContent = `Washing - Machine ${m}`;
     sel.appendChild(opt);
   });
-  (cfg.dryer_machines || []).forEach(m => {
+
+  dm.forEach(m => {
     const opt = document.createElement('option');
-    opt.value = String(m); 
+    opt.value = String(m);
     opt.textContent = `Dryer - Machine ${m}`;
     sel.appendChild(opt);
   });
+
+  // Ensure placeholder stays selected
+  sel.selectedIndex = 0;
 }
+
 
 function renderQuickChargeResult(res) {
   const host = document.getElementById('qc_table');
@@ -2141,18 +2272,17 @@ function renderQuickChargeResult(res) {
     ${res.cycle_minutes  != null ? `<tr><td>Minutes</td><td>${res.cycle_minutes}</td></tr>` : ''}
   `;
 
- host.innerHTML = `
-  <table>
-    <thead>
-      <tr><th>Setting</th><th>Value</th></tr>
-    </thead>
-    <tbody>
-      ${trs}
-    </tbody>
-  </table>
-`;
+  host.innerHTML = `
+    <table>
+      <thead>
+        <tr><th>Field</th><th>Value</th></tr>
+      </thead>
+      <tbody>
+        ${rows}
+      </tbody>
+    </table>
+  `;
 }
-
 
 // --- formatting & validation helpers ---
 function parseCodeFromInput(value) {
@@ -2590,19 +2720,21 @@ async function loadConfig() {
   const js = await res.json();
 
   // populate inputs
-  document.getElementById('cfg_wm').value  = (js.washing_machines || []).join(',');
-  document.getElementById('cfg_dm').value  = (js.dryer_machines  || []).join(',');
+  const wm = (Array.isArray(js.washing_machines) && js.washing_machines.length) ? js.washing_machines : [1,2,3];
+  const dm = (Array.isArray(js.dryer_machines) && js.dryer_machines.length) ? js.dryer_machines : [4,5,6];
+  document.getElementById('cfg_wm').value = wm.join(',');
+  document.getElementById('cfg_dm').value = dm.join(',');
   document.getElementById('cfg_wmin').value = js.washing_minutes ?? 30;
   document.getElementById('cfg_dmin').value = js.dryer_minutes   ?? 60;
   document.getElementById('cfg_wp').value   = js.price_washing   ?? 5;
   document.getElementById('cfg_dp').value   = js.price_dryer     ?? 5;
   document.getElementById('cfg_disabled').value = (js.disabled_machines || []).join(',');
 
-  // render compact table (no raw JSON)
-  renderSettingsTable(js);
+  const view = { ...js, washing_machines: wm, dryer_machines: dm };
+  renderSettingsTable(view);
 
-  // populate Quick Charge machines combobox
-  populateQuickChargeMachines(js);
+  // populate Quick Charge machines combobox — defaults applied
+  populateQuickChargeMachines(view);
 }
 
 
@@ -2633,52 +2765,125 @@ async function saveConfig() {
   await loadConfig();
 }
 
+function toggleChargeButton() {
+  const btn = document.getElementById('charge_btn');
+  if (!btn) return;
+  const tenant = (document.getElementById('qc_tenant')?.value || '').trim();
+  const machine = (document.getElementById('qc_machine')?.value || '').trim();
+  const enable = tenant.length > 0 && machine.length > 0;
+  const loading = btn.classList?.contains('is-loading');
+  btn.disabled = loading ? true : !enable;
+}
+
+function initQuickChargeValidators() {
+  const tenantEl = document.getElementById('qc_tenant');
+  const machineEl = document.getElementById('qc_machine');
+  if (tenantEl) tenantEl.addEventListener('input', toggleChargeButton);
+  if (machineEl) machineEl.addEventListener('change', toggleChargeButton);
+  toggleChargeButton(); // initial state
+}
+
 
 async function simulateCharge() {
+  // Debounce (safe if no button id exists)
+  const btn = document.getElementById('charge_btn');
+  if (btn && btn.disabled) return;
+  if (btn) { btn.disabled = true; btn.classList?.add('is-loading'); }
+
   try {
     const tenantEl  = document.getElementById('qc_tenant');
     const machineEl = document.getElementById('qc_machine');
     const priceEl   = document.getElementById('qc_price');
     const minsEl    = document.getElementById('qc_minutes');
 
+    const tenant = (tenantEl?.value || '').trim();
+    const machine = (machineEl?.value || '').trim();
+    const priceVal = priceEl?.value ?? '';
+    const minsVal  = minsEl?.value ?? '';
+
     const qs = new URLSearchParams({
-      tenant_code: (tenantEl.value || '').trim(),
-      machine: (machineEl.value || '').trim(),
-      ...(priceEl.value ? { price: priceEl.value } : {}),
-      ...(minsEl.value  ? { minutes: minsEl.value } : {})
+      tenant_code: tenant,
+      machine: machine,
+      ...(priceVal ? { price: priceVal } : {}),
+      ...(minsVal  ? { minutes: minsVal } : {})
     });
 
-    const res = await fetch(`./simulate/charge?${qs.toString()}`);
+    // Idempotency-Key (per click)
+    const idemKey = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ('idem|' + Date.now());
+
+    const res = await fetch(`./simulate/charge?${qs.toString()}`, {
+      headers: { 'Idempotency-Key': idemKey }
+    });
+
     let js = {};
     try { js = await res.json(); } catch (_) { js = {}; }
 
+    // Map response to UI payload
     const ui = {
       ok: res.ok && js.ok !== false,
-      account_id: js.tenant_code || (tenantEl.value || '').trim(),
-      name: (window.USERS_CACHE && USERS_CACHE[js.tenant_code]?.name) || '',
-      machine: js.machine || (machineEl.value || '').trim(),
-      status: res.ok ? 'OK' : (js.error || js.message || 'ERROR'),
+      account_id: js.tenant_code || tenant,
+      name: (window.USERS_CACHE && window.USERS_CACHE[js.tenant_code]?.name) || '',
+      machine: js.machine || machine,
+      status: 'OK',
       charged: js.charged,
       balance_before: js.balance_before,
       balance_after: js.balance_after,
-      cycle_minutes: js.cycle_minutes ?? (minsEl.value ? parseInt(minsEl.value, 10) : null)
+      cycle_minutes: (js.cycle_minutes != null)
+        ? Number(js.cycle_minutes)
+        : (minsVal ? parseInt(minsVal, 10) : null)
     };
 
-    renderQuickChargeResult(ui);
+    // Detailed status mapping on errors
+    if (!res.ok) {
+      if (res.status === 409) {
+        // could be duplicate or machine busy; prefer backend detail if present
+        ui.status = (js?.detail === 'DUPLICATE_REQUEST') ? 'DUPLICATE_REQUEST' : (js?.detail || 'MACHINE_BUSY');
+      } else if (res.status === 402) {
+        ui.status = 'INSUFFICIENT_FUNDS';
+      } else if (res.status === 423) {
+        ui.status = 'MACHINE_DISABLED';
+      } else if (res.status === 404) {
+        ui.status = 'TENANT_NOT_FOUND';
+      } else if (res.status === 500) {
+        ui.status = 'ACTIVATION_FAILED';
+      } else {
+        ui.status = js?.detail || js?.error || js?.message || 'ERROR';
+      }
+      ui.ok = false;
+    }
 
+    // Render UI result (your existing renderer)
+    if (typeof renderQuickChargeResult === 'function') {
+      renderQuickChargeResult(ui);
+    }
+
+    // On success, update local deadlines and optionally refresh lists
     if (ui.ok && ui.machine && ui.cycle_minutes) {
       window.MACHINE_DEADLINES = window.MACHINE_DEADLINES || {};
       window.MACHINE_DEADLINES[String(ui.machine)] =
         Date.now() + Number(ui.cycle_minutes) * 60 * 1000;
 
+      // If you have a refresher, call it
       if (typeof renderMachines === 'function') {
-        renderMachines();
+        try { renderMachines(); } catch (_) {}
+      }
+      if (typeof refreshTenant === 'function' && ui.account_id) {
+        try { refreshTenant(ui.account_id); } catch (_) {}
       }
     }
+
   } catch (err) {
-    renderQuickChargeResult({ ok: false, status: 'REQUEST_FAILED' });
+    if (typeof renderQuickChargeResult === 'function') {
+      renderQuickChargeResult({ ok: false, status: 'REQUEST_FAILED' });
+    }
+  } finally {
+    if (btn) {
+      btn.classList?.remove('is-loading');
+      toggleChargeButton(); // enable only if inputs are valid
+    }
   }
 }
+
 
 
 function renderCsvTable(data, type) {
@@ -2693,9 +2898,9 @@ function renderCsvTable(data, type) {
   if (type === 'accounts') {
     const rows = data.map(acc => {
       const date = acc.last_transaction_utc
-        ? new Intl.DateTimeFormat("en-NZ", { dateStyle: "short", timeStyle: "short" })
-            .format(new Date(acc.last_transaction_utc))
-        : "";
+          ? new Intl.DateTimeFormat("en-NZ", { dateStyle: "short", timeStyle: "short", timeZone: "Pacific/Auckland" })
+              .format(new Date(acc.last_transaction_utc))
+          : "";
       return `
         <tr>
           <td>${acc.tenant_code || ''}</td>
@@ -2722,9 +2927,9 @@ function renderCsvTable(data, type) {
     // transactions
     const rows = data.map(t => {
       const date = t.timestamp
-        ? new Intl.DateTimeFormat("en-NZ", { dateStyle: "short", timeStyle: "short" })
-            .format(new Date(t.timestamp))
-        : "";
+          ? new Intl.DateTimeFormat("en-NZ", { dateStyle: "short", timeStyle: "short", timeZone: "Pacific/Auckland" })
+              .format(new Date(t.timestamp))
+          : "";
       return `
         <tr>
           <td>${date}</td>
@@ -2789,22 +2994,42 @@ function renderMachinesTable(machines) {
   const rows = machines.map(m => {
     const machineName = `${m.category === 'washing' ? 'Washing' : 'Dryer'} - Machine ${m.id}`;
 
-    const status =
+    let status =
       m.state === 'on'       ? 'Busy' :
       m.state === 'off'      ? 'Available' :
       m.state === 'disabled' ? 'Disabled' : 'Unknown';
 
-    const statusCell = statusPill(status);
-
     let remainingText = '';
     let deadlineAttr = '';
-    if (status === 'Busy' && Number.isFinite(m.remaining_seconds) && m.remaining_seconds > 0) {
-      const mins = Math.floor(m.remaining_seconds / 60);
-      const secs = (m.remaining_seconds % 60).toString().padStart(2, '0');
-      remainingText = `${mins}:${secs}`;
-      const deadlineMs = Date.now() + (m.remaining_seconds * 1000);
-      deadlineAttr = ` data-mid="${String(m.id)}" data-deadline="${deadlineMs}"`;
+
+    // Client-side fallback: if server says Available but we started a simulation, show countdown
+    const clientDeadline = (window.MACHINE_DEADLINES && window.MACHINE_DEADLINES[String(m.id)])
+      ? Number(window.MACHINE_DEADLINES[String(m.id)]) : 0;
+    const nowMs = Date.now();
+    if (status !== 'Busy' && clientDeadline > nowMs) {
+      status = 'Busy';
     }
+
+    // Remaining time (prefer server value; else use client fallback)
+    if (status === 'Busy') {
+      if (Number.isFinite(m.remaining_seconds) && m.remaining_seconds > 0) {
+        const mins = Math.floor(m.remaining_seconds / 60);
+        const secs = (m.remaining_seconds % 60).toString().padStart(2, '0');
+        remainingText = `${mins}:${secs}`;
+        const deadlineMs = Date.now() + (m.remaining_seconds * 1000);
+        deadlineAttr = ` data-mid="${String(m.id)}" data-deadline="${deadlineMs}"`;
+      } else if (clientDeadline > nowMs) {
+        const ms = clientDeadline - nowMs;
+        const total = Math.ceil(ms / 1000);
+        const mins = Math.floor(total / 60);
+        const secs = String(total % 60).padStart(2, '0');
+        remainingText = `${mins}:${secs}`;
+        deadlineAttr = ` data-mid="${String(m.id)}" data-deadline="${clientDeadline}"`;
+      }
+    }
+
+const statusCell = statusPill(status);
+
 
     return `
       <tr>
@@ -2886,7 +3111,6 @@ async function uploadAuto() {
 async function refresh() {
   await renderMachines();
   await renderHistory();
-  // UI boyu güncel kalsın
   if (typeof fitCanvasToCards === 'function') {
     setTimeout(fitCanvasToCards, 0);
     setTimeout(fitCanvasToCards, 120);
@@ -2895,6 +3119,7 @@ async function refresh() {
 refresh();
 loadConfig();
 initUsersUI();
+initQuickChargeValidators();
 
 (function () {
   function initDownloadMenu() {
@@ -3202,6 +3427,68 @@ if (document.readyState === 'loading') {
   }
 })();
 </script>
+<script>
+(function () {
+  function genIdemKeyFromPayload(bodyObj) {
+    try {
+      const t = [
+        String(bodyObj?.tenant_code || ""),
+        String(bodyObj?.machine || ""),
+        String(bodyObj?.price ?? ""),
+        String(bodyObj?.cycle_minutes ?? "")
+      ].join("|");
+      return "idem|" + t;
+    } catch (_) {
+      return "idem|" + (window.crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
+    }
+  }
+  function ensureHeaders(init) {
+    if (!init) init = {};
+    if (!init.headers) init.headers = {};
+    if (init.headers instanceof Headers) {
+      const o = {};
+      init.headers.forEach((v, k) => { o[k] = v; });
+      init.headers = o;
+    }
+    return init;
+  }
+  async function readBody(init) {
+    if (!init || !init.body) return null;
+    if (typeof init.body === "string") {
+      try { return JSON.parse(init.body); } catch (_) { return null; }
+    }
+    return null;
+  }
+
+  const _origFetch = window.fetch.bind(window);
+  window.fetch = async function (input, init) {
+    const url = (typeof input === "string") ? input : (input?.url || "");
+    const method = String((init && init.method) || "GET").toUpperCase();
+
+    const isCharge = url.endsWith("/charge");
+    const isSim    = url.endsWith("/simulate/charge") || url.includes("/simulate/charge?");
+
+    if ((isCharge && method === "POST") || (isSim && method === "GET")) {
+      init = ensureHeaders(init);
+
+      const hasKey =
+        !!init.headers["Idempotency-Key"] ||
+        !!init.headers["idempotency-key"] ||
+        !!init.headers["IDEMPOTENCY-KEY"];
+
+      if (!hasKey) {
+        let key = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : null;
+        if (!key) {
+          const bodyObj = await readBody(init);
+          key = genIdemKeyFromPayload(bodyObj);
+        }
+        init.headers["Idempotency-Key"] = key;
+      }
+    }
+    return _origFetch(input, init);
+  };
+})();
+</script>
 
 </body>
 </html>
@@ -3216,7 +3503,6 @@ def machines():
 
     has_token = bool(_resolve_token(opts.get("ha_token")))  # env-aware token check
     mode = str(opts.get("do_mode") or "pulse").lower()
-    invert_di = bool(opts.get("invert_di"))
     out = []
 
     def _soft_busy(mid: str) -> bool:
@@ -3225,7 +3511,7 @@ def machines():
         except Exception:
             return False
 
-    # NEW: remaining seconds helper
+    # remaining seconds helper
     def _remaining_seconds(mid: str) -> int:
         try:
             rem = int(float(ACTIVE_UNTIL.get(mid, 0)) - time.time())
@@ -3251,14 +3537,14 @@ def machines():
             r, di = _machine_adam_mapping(mid, opts)
             di_val = None  # True=active, False=inactive, None=unknown
 
-            # Read ADAM DI (if present) and optionally invert
+            # Read ADAM DI (if present)
             if has_adam and di is not None:
                 di_val = _adam_read_di(di, opts)
-                
+
             # Read from HA sensor (if token present)
             ha_state = None
             if has_token:
-                ha_state = _get_state(sensor, opts)  # strings like "on"/"off"/"unknown"
+                ha_state = _get_state(sensor, opts)  # "on"/"off"/"unknown"/None
 
             # Timer-based soft busy
             soft = _soft_busy(mid)
@@ -3269,7 +3555,7 @@ def machines():
                 if di_val is True:
                     state, busy_source = "on", "di"
                 elif di_val is False:
-                    # DI inactive; if timer exists use it, otherwise fall back to HA
+                    # DI inactive; if timer exists it's busy, else try HA; else 'off'
                     if soft:
                         state, busy_source = "on", "timer"
                     elif ha_state in ("on", "off"):
@@ -3277,7 +3563,7 @@ def machines():
                     else:
                         state, busy_source = "off", "di"
                 else:
-                    # DI unknown -> prefer HA, then timer
+                    # DI unknown -> prefer HA, then timer, else UNKNOWN (not off)
                     if ha_state in ("on", "off"):
                         state, busy_source = ha_state, "ha"
                     elif soft:
@@ -3290,7 +3576,7 @@ def machines():
                 if soft:
                     state, busy_source = "on", "timer"
                 else:
-                    # If no timer: prefer DI; otherwise HA; otherwise assume "off"
+                    # If no timer: prefer DI; otherwise HA; if both unknown => UNKNOWN
                     if di_val is True:
                         state, busy_source = "on", "di"
                     elif di_val is False:
@@ -3298,7 +3584,7 @@ def machines():
                     elif ha_state in ("on", "off"):
                         state, busy_source = ha_state, "ha"
                     else:
-                        state, busy_source = "off", "none"
+                        state, busy_source = "unknown", "none"
 
             err = (
                 "disabled"
@@ -3312,11 +3598,11 @@ def machines():
             "ha_switch": switch,
             "ha_sensor": sensor,
             "state": state,                 # "on"/"off"/"disabled"/"unknown"
-            "busy_source": busy_source,     # "di"/"timer"/"ha"/"none"/"unknown" (diagnostics)
+            "busy_source": busy_source,     # "di"/"timer"/"ha"/"none"/"unknown"
             "price": try_price,
             "default_minutes": _default_minutes_for(mid, opts),
             "error": err,
-            "remaining_seconds": _remaining_seconds(mid)  # NEW
+            "remaining_seconds": _remaining_seconds(mid)
         })
 
     return {"ok": True, "machines": out, "simulate": bool(opts.get("simulate", False))}
@@ -3414,7 +3700,8 @@ def get_config():
         "ha_url","tts_service","media_player",
         "keypad_source","ha_ws_url","ha_event_type",
         "adam_host","adam_port","adam_unit_id","do_mode","pulse_seconds","invert_di",
-        "activation_confirm_timeout_s"
+        "activation_confirm_timeout_s",
+        "min_restart_interval_s","idempotency_window_s"
     ]
     return {k: opts.get(k) for k in keys}
 
@@ -3437,13 +3724,21 @@ def _machine_lock_path(mid: str) -> Path:
     return LOCK_DIR / f"machine_{mid}.lock"
 
 @app.post("/charge")
-def charge(req: dict):
+def charge(request: Request, req: dict = Body(...)):
     ensure_bootstrap_files()
+
+    # Parse and validate payload
+    if not isinstance(req, dict):
+        raise HTTPException(status_code=400, detail="INVALID_PAYLOAD")
+
     try:
-        tenant_code = str(req.get("tenant_code")).strip()
-        machine = str(req.get("machine")).strip()
+        tenant_code = str(req.get("tenant_code") or "").strip()
+        machine = str(req.get("machine") or "").strip()
     except Exception:
         raise HTTPException(status_code=400, detail="INVALID_PAYLOAD")
+
+    if not tenant_code or not machine:
+        raise HTTPException(status_code=400, detail="INVALID_INPUT")
 
     opts = _read_options()
     price = req.get("price", None)
@@ -3454,7 +3749,9 @@ def charge(req: dict):
         machine=machine,
         price=price,
         minutes=minutes,
-        opts=opts
+        opts=opts,
+        idem_key=(request.headers.get("Idempotency-Key") if hasattr(request, "headers") else None),
+        simulate_only=False
     )
 
 @app.get("/simulate/charge")
@@ -3465,20 +3762,18 @@ def simulate_charge(
     minutes: Optional[int] = Query(None, ge=1)
 ):
     try:
-        # force simulation regardless of current options
         opts = _read_options()
-        forced = dict(opts)
-        forced["simulate"] = True
-
         return _handle_charge(
             tenant_code=tenant_code,
             machine=machine,
             price=price,
             minutes=minutes,
-            opts=forced
+            opts=opts,
+            simulate_only=True
         )
     except HTTPException as e:
         return JSONResponse({"ok": False, "error": e.detail}, status_code=e.status_code)
+
 
 
 # ----------------------- History & Debug -----------------
@@ -3606,9 +3901,9 @@ async def upload_raw(
 
         # keep mirrors in sync
         if target == "accounts":
-            _mirror(ACCOUNTS_PATH, SHARE_ACCOUNTS)
+            (ACCOUNTS_PATH, SHARE_ACCOUNTS)
         else:
-            _mirror(TRANSACTIONS_PATH, SHARE_TX)
+            (TRANSACTIONS_PATH, SHARE_TX)
 
     return {"ok": True, "target": target, "bytes": len(data_bytes)}
 
