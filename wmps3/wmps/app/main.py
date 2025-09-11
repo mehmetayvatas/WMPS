@@ -3607,6 +3607,23 @@ if (document.readyState === 'loading') {
   };
 })();
 </script>
+<script>
+function _debounce(fn, ms=250){
+  let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); };
+}
+
+const refreshAllDebounced = _debounce(() => {
+  try { refresh(); } catch (_) {}
+}, 200);
+
+document.addEventListener('click', (e) => {
+  const btn = e.target?.closest('button');
+  if (!btn) return;
+  if (btn.hasAttribute('data-no-refresh')) return;
+
+  setTimeout(refreshAllDebounced, 200);
+});
+</script>
 
 </body>
 </html>
