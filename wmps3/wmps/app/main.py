@@ -157,7 +157,7 @@ def ensure_bootstrap_files() -> None:
             "simulate": True,
             "tts_service": "tts.google_translate_say",
             "media_player": "media_player.vlc_telnet",
-            "tts_language": "",  # optional, speak() kullanıyor
+            "tts_language": "", 
 
             # keypad
             "keypad_source": "ha",  # ha|evdev|auto
@@ -926,7 +926,7 @@ def _handle_charge(tenant_code: str, machine: str, price: Optional[float], minut
             write_accounts(accounts)
 
     if ok or simulate:
-        speak(f"Machine {machine} started for {m} minutes.")
+        speak(f"Machine {machine} started.")
 
     return {
         "ok": True,
@@ -1005,7 +1005,7 @@ class KeypadStateMachine:
                 if 1 <= n <= 6:
                     self.sel_machine = n
                     mins = _default_minutes_for(str(n), self.opts_provider())
-                    self.speak(f"Machine {n} selected for {mins} minutes. Press enter to confirm.")
+                    self.speak(f"Machine {n} selected. Press enter to confirm.")
                     self.state = "CONFIRM"
             return
 
